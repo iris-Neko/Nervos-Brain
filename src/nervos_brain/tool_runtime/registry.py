@@ -18,6 +18,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "query": {"type": "string", "maxLength": 512},
             "filters": {"type": "object"},
+            "regex_queries": {"type": "array"},
             "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
         },
         "additionalProperties": False,
@@ -94,6 +95,8 @@ def validate_tool_args(tool: str, args: dict[str, Any]) -> list[str]:
             errors.append(f"arg '{key}' must be integer")
         elif expected_type == "object" and not isinstance(value, dict):
             errors.append(f"arg '{key}' must be object")
+        elif expected_type == "array" and not isinstance(value, list):
+            errors.append(f"arg '{key}' must be array")
 
         if expected_type == "string":
             max_len = prop_schema.get("maxLength")

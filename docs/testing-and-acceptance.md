@@ -7,9 +7,15 @@
 ```bash
 bash -n bootstrap_qdrant_server.sh restart_telegram_bot.sh
 mamba run -n nervos-brain python -m py_compile \
+  scripts/run_discord_bot.py \
+  scripts/run_github_docs_ingest.py \
+  scripts/run_github_code_ingest.py \
   scripts/migrate_qdrant_server_from_archive.py \
   scripts/run_talk_mcp_server.py \
-  scripts/run_talk_forum_ingest.py
+  scripts/run_talk_forum_ingest.py \
+  src/nervos_brain/tool_runtime/telegram_bot_runtime.py \
+  src/nervos_brain/tool_runtime/discord_bot_runtime.py \
+  src/nervos_brain/tool_runtime/talk_mcp_adapter.py
 ```
 
 确认 Git LFS 已拉取三套 archive DB：
@@ -76,3 +82,12 @@ mamba run -n nervos-brain pytest tests/test_full_graph.py tests/test_reflection_
 - Telegram Bot 能启动，日志无 token/config 缺失错误。
 - Discord Bot 能启动，Developer Portal 已开启 `MESSAGE CONTENT INTENT`，guild/channel 限制符合预期。
 - Talk forum ingest timer 如需启用，`systemctl --user list-timers` 能看到下一次执行时间。
+
+## 人工验收建议
+
+- Telegram 群里 mention Bot 提一个 CKB 基础问题，确认只在被唤起时回复。
+- Reply Bot 上一条消息并发送“用小白版解释一下”，确认回答围绕被 reply 的消息，而不是普通最近历史。
+- 提一个需要资料的问题，例如 CCC / Fiber / Spore DOB，确认回答走检索并带引用。
+- Discord 频道里 mention Bot 测试同类问题，确认 Developer Portal intents 和频道权限正确。
+- 测试长代码块、链接、列表和引用，确认 Telegram / Discord 格式没有被分段破坏。
+- 如启用 CSAT 或 `/feedback`，确认本地 feedback 文件有记录，且不会提交到 Git。

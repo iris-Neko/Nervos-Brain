@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import time
 import re
+import inspect
 from typing import Any
 
 from nervos_brain.core_protocols import ToolCallRequest
@@ -18,14 +19,20 @@ def handle_qdrant_search(request: ToolCallRequest) -> dict[str, Any]:
     args = request["args"]
     retriever = args.get("_multi_retriever")
     if retriever is not None:
-        results = retriever.search(
-            query=str(args["query"]),
-            filters=args.get("filters") or None,
-            top_k=int(args.get("top_k", 5)),
-        )
+        search_kwargs: dict[str, Any] = {
+            "query": str(args["query"]),
+            "filters": args.get("filters") or None,
+            "top_k": int(args.get("top_k", 5)),
+        }
+        if _search_accepts_regex_queries(retriever):
+            search_kwargs["regex_queries"] = (
+                args.get("regex_queries") if isinstance(args.get("regex_queries"), list) else None
+            )
+        results = retriever.search(**search_kwargs)
+        regex_meta = _summarize_regex_payloads(results, retriever)
         return {
             "evidence": results,
-            "data": {"hit_count": len(results), "backend": "multi_retriever"},
+            "data": {"hit_count": len(results), "backend": "multi_retriever", **regex_meta},
             "raw_size_bytes": sum(len(e.get("snippet", "")) for e in results),
             "redactions_applied": [],
         }
@@ -46,6 +53,48 @@ def handle_qdrant_search(request: ToolCallRequest) -> dict[str, Any]:
         "raw_size_bytes": sum(len(e.get("snippet", "")) for e in results),
         "redactions_applied": [],
     }
+
+
+def _summarize_regex_payloads(
+    results: list[dict[str, Any]],
+    retriever: Any | None = None,
+) -> dict[str, int | str]:
+    if retriever is not None:
+        summary = getattr(retriever, "last_regex_summary", None)
+        if isinstance(summary, dict):
+            data: dict[str, int | str] = {
+                "regex_queries_count": int(summary.get("regex_queries_count", 0) or 0),
+                "regex_valid_count": int(summary.get("regex_valid_count", 0) or 0),
+                "regex_dropped_count": int(summary.get("regex_dropped_count", 0) or 0),
+            }
+            reasons = str(summary.get("regex_dropped_reasons", "") or "").strip()
+            if reasons:
+                data["regex_dropped_reasons"] = reasons
+            return data
+    for row in results:
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if "regex_queries_count" not in payload:
+            continue
+        summary: dict[str, int | str] = {
+            "regex_queries_count": int(payload.get("regex_queries_count", 0) or 0),
+            "regex_valid_count": int(payload.get("regex_valid_count", 0) or 0),
+            "regex_dropped_count": int(payload.get("regex_dropped_count", 0) or 0),
+        }
+        reasons = str(payload.get("regex_dropped_reasons", "") or "").strip()
+        if reasons:
+            summary["regex_dropped_reasons"] = reasons
+        return summary
+    return {"regex_queries_count": 0, "regex_valid_count": 0, "regex_dropped_count": 0}
+
+
+def _search_accepts_regex_queries(retriever: Any) -> bool:
+    try:
+        signature = inspect.signature(retriever.search)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "regex_queries" in signature.parameters
 
 
 def handle_memory_fetch(request: ToolCallRequest) -> dict[str, Any]:

@@ -23,7 +23,9 @@ from .discord_bot_protocol_adapter import (
     discord_message_to_message_envelope,
     outbound_message_to_discord_requests,
 )
+from .fast_mode import FastModeStateStore, fast_status_message, parse_fast_command
 from .feedback import FeedbackJsonlStore, parse_csat_callback_data
+from .progress import ProgressUpdateConfig
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ class DiscordGateway:
         target_elapsed_ms: int = 30000,
         max_elapsed_ms: int = 90000,
         attachment_max_bytes: int = _DEFAULT_ATTACHMENT_MAX_BYTES,
+        fast_mode_store: FastModeStateStore | None = None,
     ) -> None:
         self._graph_runner = graph_runner
         self._allowed_channel_ids = set(allowed_channel_ids or [])
@@ -98,6 +101,7 @@ class DiscordGateway:
         self._target_elapsed_ms = max(0, int(target_elapsed_ms or 0))
         self._max_elapsed_ms = max(0, int(max_elapsed_ms or 0))
         self._attachment_max_bytes = max(1024, int(attachment_max_bytes or _DEFAULT_ATTACHMENT_MAX_BYTES))
+        self._fast_mode_store = fast_mode_store or FastModeStateStore()
 
     def process_message_payload(
         self,
@@ -122,6 +126,17 @@ class DiscordGateway:
             return _ignored_row(message_id, channel_id, guild_id, "channel_not_allowed")
 
         content = str(payload.get("content", "") or "")
+        is_runtime_command = _is_feedback_command_text(content) or _is_fast_command_text(content)
+        if guild_id and self._mention_only_in_guild:
+            if not bot_user_id:
+                return _ignored_row(message_id, channel_id, guild_id, "missing_bot_user_id")
+            mentioned = _is_bot_mentioned(content, bot_user_id, payload)
+            bot_reply = self._respond_to_bot_replies and _is_reply_to_bot(payload)
+            if not mentioned and not bot_reply and not is_runtime_command:
+                return _ignored_row(message_id, channel_id, guild_id, "not_mentioned")
+            if mentioned:
+                content = _strip_bot_mention(content, bot_user_id)
+
         if _is_feedback_command_text(content):
             normalized_feedback_payload = dict(payload)
             normalized_feedback_payload["content"] = content
@@ -131,16 +146,6 @@ class DiscordGateway:
                 return _ignored_row(message_id, channel_id, guild_id, "unsupported_message")
             return self._process_feedback_command(envelope=envelope, dry_run=dry_run)
 
-        if guild_id and self._mention_only_in_guild:
-            if not bot_user_id:
-                return _ignored_row(message_id, channel_id, guild_id, "missing_bot_user_id")
-            mentioned = _is_bot_mentioned(content, bot_user_id, payload)
-            bot_reply = self._respond_to_bot_replies and _is_reply_to_bot(payload)
-            if not mentioned and not bot_reply:
-                return _ignored_row(message_id, channel_id, guild_id, "not_mentioned")
-            if mentioned:
-                content = _strip_bot_mention(content, bot_user_id)
-
         normalized_payload = dict(payload)
         normalized_payload["content"] = content
 
@@ -149,7 +154,21 @@ class DiscordGateway:
         except ValueError:
             return _ignored_row(message_id, channel_id, guild_id, "unsupported_message")
 
+        fast_command = parse_fast_command(
+            str(envelope.get("command", "") or ""),
+            str(envelope.get("command_args", "") or ""),
+        )
+        if fast_command is not None:
+            return self._process_fast_command(
+                envelope=envelope,
+                action=fast_command.action,
+                message=fast_command.message,
+                dry_run=dry_run,
+            )
+
         state = discord_message_envelope_to_graph_state(envelope)
+        if self._consume_fast_mode(envelope):
+            state["_llm_service_tier"] = "priority"
         request_started_ts_ms = int(time.time() * 1000)
         graph_start = time.perf_counter()
         state["_request_started_ts_ms"] = request_started_ts_ms
@@ -239,6 +258,59 @@ class DiscordGateway:
             "request_id": state.get("request_id"),
             "send_requests": send_requests,
         }
+
+    def _process_fast_command(
+        self,
+        *,
+        envelope: dict[str, Any],
+        action: str,
+        message: str,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        context = envelope.get("context", {}) if isinstance(envelope.get("context"), dict) else {}
+        user_id = str(context.get("user_id", "") or "")
+        platform = str(context.get("platform", "discord") or "discord")
+        if action == "enable":
+            if not dry_run:
+                self._fast_mode_store.enable_next(platform=platform, user_id=user_id)
+            text = message
+        elif action == "disable":
+            if not dry_run:
+                self._fast_mode_store.disable(platform=platform, user_id=user_id)
+            text = message
+        elif action == "status":
+            text = fast_status_message(
+                pending=self._fast_mode_store.is_pending(platform=platform, user_id=user_id)
+            )
+        else:
+            text = message
+        send_requests = [
+            {
+                "method": "create_message",
+                "payload": {
+                    "channel_id": str(context.get("channel_id", "")),
+                    "content": text,
+                    "allowed_mentions": {"parse": []},
+                },
+            }
+        ]
+        return {
+            "message_id": envelope.get("message_id"),
+            "channel_id": context.get("channel_id"),
+            "guild_id": context.get("guild_id"),
+            "ignored": False,
+            "reason": "fast_command",
+            "request_id": None,
+            "send_requests": [] if dry_run else send_requests,
+            "fast_action": action,
+        }
+
+    def _consume_fast_mode(self, envelope: dict[str, Any]) -> bool:
+        context = envelope.get("context", {}) if isinstance(envelope.get("context"), dict) else {}
+        return self._fast_mode_store.consume_next(
+            platform=str(context.get("platform", "discord") or "discord"),
+            user_id=str(context.get("user_id", "") or ""),
+        )
 
     def process_interaction_payload(self, payload: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
         data = payload.get("data")
@@ -385,6 +457,11 @@ class DiscordGateway:
 
     def _attach_recent_memory_context(self, *, state: dict[str, Any], envelope: dict[str, Any]) -> None:
         reply_context = _reply_context_from_envelope(envelope)
+        if envelope.get("reply_to_message_id"):
+            state["recent_messages"] = []
+            state["conversation_context"] = reply_context
+            return
+
         svc = self._memory_service
         if svc is None or not hasattr(svc, "list_recent_message_events"):
             if reply_context:
@@ -473,8 +550,13 @@ class DiscordGateway:
                 "user_id": str(context.get("user_id", "")),
                 "message_id": str(envelope.get("message_id", "")),
                 "incoming_reply_to_message_id": str(envelope.get("reply_to_message_id", "")),
+                "reply_to_role": str(envelope.get("reply_to_role", "")),
+                "reply_to_content_preview": _preview_text(envelope.get("reply_to_content", ""), limit=500),
+                "conversation_context_preview": _preview_text(state.get("conversation_context", ""), limit=900),
+                "recent_messages_preview": _debug_recent_messages_preview(state.get("recent_messages")),
                 "content_preview": str(envelope.get("content", ""))[:240],
                 "route_decision": str(result.get("_route_decision") or state.get("_route_decision") or ""),
+                "llm_service_tier": str(result.get("_llm_service_tier") or state.get("_llm_service_tier") or ""),
                 "retrieval_policy": str(result.get("retrieval_policy") or state.get("retrieval_policy") or ""),
                 "reflection_decision": str(result.get("reflection_decision") or state.get("reflection_decision") or ""),
                 "tool_summary": str(result.get("_tool_execution_summary") or state.get("_tool_execution_summary") or ""),
@@ -498,10 +580,18 @@ class DiscordGateway:
 class DiscordBotRuntime:
     """Online Discord runtime backed by discord.py event loop."""
 
-    def __init__(self, *, config: DiscordBotConfig, gateway: DiscordGateway, max_worker_threads: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        config: DiscordBotConfig,
+        gateway: DiscordGateway,
+        max_worker_threads: int = 4,
+        progress_update_config: ProgressUpdateConfig | None = None,
+    ) -> None:
         self._config = config
         self._gateway = gateway
         self._max_worker_threads = max(1, min(int(max_worker_threads or 1), 32))
+        self._progress_update_config = progress_update_config or ProgressUpdateConfig(enabled=False)
         self._channel_locks: dict[str, asyncio.Lock] = {}
 
     def run(self) -> None:
@@ -527,13 +617,23 @@ class DiscordBotRuntime:
             payload = _discord_message_to_payload(message)
             channel_id = str(payload.get("channel_id") or "unknown")
             lock = self._channel_locks.setdefault(channel_id, asyncio.Lock())
+            progress_task: asyncio.Task | None = None
             async with lock:
-                row = await _run_gateway_in_executor(
-                    gateway=self._gateway,
-                    payload=payload,
-                    bot_user_id=str(client.user.id),
-                    executor=executor,
+                progress_task = asyncio.create_task(
+                    _send_discord_progress_updates(
+                        message=message,
+                        config=self._progress_update_config,
+                    )
                 )
+                try:
+                    row = await _run_gateway_in_executor(
+                        gateway=self._gateway,
+                        payload=payload,
+                        bot_user_id=str(client.user.id),
+                        executor=executor,
+                    )
+                finally:
+                    await _stop_discord_progress_task(progress_task)
             if row.get("ignored") and not row.get("send_requests"):
                 logger.info("[skip] message_id=%s channel_id=%s guild_id=%s reason=%s", row.get("message_id"), row.get("channel_id"), row.get("guild_id"), row.get("reason"))
                 return
@@ -562,6 +662,46 @@ class DiscordBotRuntime:
 async def _run_gateway_in_executor(*, gateway: DiscordGateway, payload: dict[str, Any], bot_user_id: str, executor: ThreadPoolExecutor) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, lambda: gateway.process_message_payload(payload, bot_user_id=bot_user_id))
+
+
+async def _send_discord_progress_updates(*, message: Any, config: ProgressUpdateConfig) -> None:
+    if not config.should_run:
+        return
+    try:
+        await asyncio.sleep(config.first_after_s)
+        for idx in range(config.max_updates):
+            await _send_discord_progress_message(message=message, text=config.message_for(idx))
+            if idx >= config.max_updates - 1:
+                return
+            await asyncio.sleep(config.interval_s)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("discord progress update loop failed", exc_info=True)
+
+
+async def _stop_discord_progress_task(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.debug("discord progress task failed while stopping", exc_info=True)
+
+
+async def _send_discord_progress_message(*, message: Any, text: str) -> None:
+    allowed_mentions = _build_discord_allowed_mentions({"allowed_mentions": {"parse": []}})
+    try:
+        await message.reply(text, allowed_mentions=allowed_mentions)
+    except Exception:
+        logger.debug("discord progress reply failed; retrying detached message", exc_info=True)
+        try:
+            await message.channel.send(text, allowed_mentions=allowed_mentions)
+        except Exception:
+            logger.debug("discord progress detached send failed", exc_info=True)
 
 
 def _is_bot_mentioned(content: str, bot_user_id: str, payload: dict[str, Any]) -> bool:
@@ -722,6 +862,11 @@ def _is_feedback_command_text(text: str) -> bool:
     return raw.startswith("/feedback")
 
 
+def _is_fast_command_text(text: str) -> bool:
+    raw = str(text or "").strip().lower()
+    return raw == "/fast" or raw.startswith("/fast ")
+
+
 def _parse_feedback_args(args: str) -> tuple[str, str]:
     text = str(args or "").strip()
     if not text:
@@ -798,13 +943,45 @@ def _format_recent_messages(rows: list[Any], limit_chars: int = 1800) -> str:
 
 def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
     reply_text = re.sub(r"\s+", " ", str(envelope.get("reply_to_content", "") or "")).strip()
+    reply_id = str(envelope.get("reply_to_message_id", "") or "").strip()
     if not reply_text:
+        if reply_id:
+            role = str(envelope.get("reply_to_role", "") or "").strip().lower()
+            label = "assistant" if role in {"assistant", "bot"} else "user" if role == "user" else "replied_message"
+            return (
+                f"当前消息正在回复一条 {label} 消息（message_id={reply_id}），"
+                "但平台没有提供被回复消息内容。不要从普通历史记录猜测被回复内容；"
+                "如果当前短追问无法独立理解，应请用户补充或重发被回复内容。"
+            )
         return ""
     if len(reply_text) > 700:
         reply_text = reply_text[:700].rstrip() + "..."
     role = str(envelope.get("reply_to_role", "") or "").strip().lower()
     label = "assistant" if role in {"assistant", "bot"} else "user" if role == "user" else "replied_message"
     return f"当前消息正在回复这条 {label} 消息: {reply_text}"
+
+
+def _preview_text(value: Any, *, limit: int = 300) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "..."
+    return text
+
+
+def _debug_recent_messages_preview(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "role": str(item.get("role", "")),
+                "content_preview": _preview_text(item.get("content", ""), limit=180),
+            }
+        )
+    return rows
 
 
 def _normalized_message_text(text: Any) -> str:

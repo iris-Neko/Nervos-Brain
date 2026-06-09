@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -14,7 +15,10 @@ from nervos_brain.tool_runtime.discord_bot_runtime import (
     DiscordBotRuntime,
     DiscordBotRuntimeError,
     DiscordGateway,
+    _send_discord_progress_updates,
 )
+from nervos_brain.tool_runtime.fast_mode import FastModeStateStore
+from nervos_brain.tool_runtime.progress import ProgressUpdateConfig
 
 
 def _load_script_module(name: str, filename: str):
@@ -281,6 +285,76 @@ def test_gateway_processes_reply_to_bot_without_mention_and_injects_reply_contex
     assert "上一条回答内容" in captured["conversation_context"]
 
 
+def test_gateway_reply_context_does_not_mix_unrelated_recent_context():
+    memory = _FakeMemoryService(
+        rows=[
+            {"role": "user", "content": "Fiber WASM 是怎么实现的？"},
+            {"role": "assistant", "content": "WASM 可以放一些轻量验证逻辑。"},
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.update(state)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = DiscordGateway(
+        graph_runner=runner,
+        mention_only_in_guild=True,
+        respond_to_bot_replies=True,
+        memory_service=memory,
+    )
+    payload = _sample_payload(guild_id="g-1", text="小白版的解释，你说一下")
+    payload["reference"] = {
+        "message_id": "m-bot",
+        "content": "CKB 通常指 Nervos CKB，是 Nervos 生态里的公链基础层。",
+        "author": {"id": "999", "bot": True},
+    }
+
+    row = gateway.process_message_payload(payload, bot_user_id="999")
+
+    assert row["ignored"] is False
+    assert memory.reads == []
+    assert captured["recent_messages"] == []
+    assert "CKB 通常指 Nervos CKB" in captured["conversation_context"]
+    assert "Fiber WASM" not in captured["conversation_context"]
+
+
+def test_gateway_reply_without_snapshot_does_not_guess_from_recent_context():
+    memory = _FakeMemoryService(
+        rows=[
+            {"role": "user", "content": "Fiber WASM 是怎么实现的？"},
+            {"role": "assistant", "content": "WASM 可以放一些轻量验证逻辑。"},
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.update(state)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = DiscordGateway(
+        graph_runner=runner,
+        mention_only_in_guild=True,
+        respond_to_bot_replies=True,
+        memory_service=memory,
+    )
+    payload = _sample_payload(guild_id="g-1", text="小白版的解释，你说一下")
+    payload["reference"] = {
+        "message_id": "m-bot",
+        "author": {"id": "999", "bot": True},
+    }
+
+    row = gateway.process_message_payload(payload, bot_user_id="999")
+
+    assert row["ignored"] is False
+    assert memory.reads == []
+    assert captured["recent_messages"] == []
+    assert "平台没有提供被回复消息内容" in captured["conversation_context"]
+    assert "不要从普通历史记录猜测被回复内容" in captured["conversation_context"]
+    assert "Fiber WASM" not in captured["conversation_context"]
+
+
 def test_gateway_ignored_message_does_not_write_memory():
     memory = _FakeMemoryService()
     gateway = DiscordGateway(
@@ -415,3 +489,154 @@ def test_gateway_text_attachment_is_added_to_graph_context(monkeypatch):
     assert row["ignored"] is False
     assert "hello from attachment" in captured["user_message"]["content"]
     assert captured["user_message"]["attachments"][0]["status"] == "ready"
+
+
+def test_fast_command_sets_one_shot_priority_for_next_discord_request(tmp_path: Path):
+    store = FastModeStateStore(tmp_path / "fast.json")
+    captured: list[dict[str, Any]] = []
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.append(dict(state))
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = DiscordGateway(
+        graph_runner=runner,
+        mention_only_in_guild=False,
+        fast_mode_store=store,
+    )
+
+    command_row = gateway.process_message_payload(_sample_payload(text="/fast"), bot_user_id=None)
+    first_row = gateway.process_message_payload(_sample_payload(message_id="m-2", text="ckb是什么"), bot_user_id=None)
+    second_row = gateway.process_message_payload(_sample_payload(message_id="m-3", text="fiber是什么"), bot_user_id=None)
+
+    assert command_row["reason"] == "fast_command"
+    assert command_row["fast_action"] == "enable"
+    assert "已开启 fast 模式" in command_row["send_requests"][0]["payload"]["content"]
+    assert first_row["ignored"] is False
+    assert second_row["ignored"] is False
+    assert len(captured) == 2
+    assert captured[0]["_llm_service_tier"] == "priority"
+    assert "_llm_service_tier" not in captured[1]
+    assert store.is_pending(platform="discord", user_id="u-1") is False
+
+
+def test_fast_command_is_user_scoped_for_discord(tmp_path: Path):
+    store = FastModeStateStore(tmp_path / "fast.json")
+    captured: list[dict[str, Any]] = []
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.append(dict(state))
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = DiscordGateway(
+        graph_runner=runner,
+        mention_only_in_guild=False,
+        fast_mode_store=store,
+    )
+
+    gateway.process_message_payload(_sample_payload(text="/fast", user_id="u-1"), bot_user_id=None)
+    gateway.process_message_payload(_sample_payload(message_id="m-2", text="ckb是什么", user_id="u-2"), bot_user_id=None)
+    gateway.process_message_payload(_sample_payload(message_id="m-3", text="ckb是什么", user_id="u-1"), bot_user_id=None)
+
+    assert "_llm_service_tier" not in captured[0]
+    assert captured[1]["_llm_service_tier"] == "priority"
+
+
+def test_fast_off_and_status_do_not_enter_discord_graph(tmp_path: Path):
+    store = FastModeStateStore(tmp_path / "fast.json")
+    calls: list[dict[str, Any]] = []
+    gateway = DiscordGateway(
+        graph_runner=lambda state: calls.append(state) or {},
+        mention_only_in_guild=False,
+        fast_mode_store=store,
+    )
+
+    gateway.process_message_payload(_sample_payload(text="/fast"), bot_user_id=None)
+    status_row = gateway.process_message_payload(_sample_payload(message_id="m-2", text="/fast status"), bot_user_id=None)
+    off_row = gateway.process_message_payload(_sample_payload(message_id="m-3", text="/fast off"), bot_user_id=None)
+
+    assert status_row["reason"] == "fast_command"
+    assert off_row["fast_action"] == "disable"
+    assert calls == []
+    assert "已待命" in status_row["send_requests"][0]["payload"]["content"]
+    assert "已取消 fast 模式" in off_row["send_requests"][0]["payload"]["content"]
+    assert store.is_pending(platform="discord", user_id="u-1") is False
+
+
+def test_fast_command_works_as_discord_runtime_command_in_guild(tmp_path: Path):
+    store = FastModeStateStore(tmp_path / "fast.json")
+    gateway = DiscordGateway(
+        graph_runner=lambda state: state,
+        mention_only_in_guild=True,
+        fast_mode_store=store,
+    )
+
+    plain_command = gateway.process_message_payload(_sample_payload(guild_id="g-1", text="/fast"), bot_user_id="999")
+    mentioned_command = gateway.process_message_payload(
+        _sample_payload(guild_id="g-1", text="<@999> /fast", mention_user_ids=["999"]),
+        bot_user_id="999",
+    )
+
+    assert plain_command["reason"] == "fast_command"
+    assert mentioned_command["reason"] == "fast_command"
+    assert store.is_pending(platform="discord", user_id="u-1") is True
+
+
+class _FakeDiscordChannel:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send(self, content: str, **kwargs: Any) -> None:
+        self.sent.append({"content": content, **kwargs})
+
+
+class _FakeDiscordMessage:
+    def __init__(self, *, reply_fails: bool = False) -> None:
+        self.channel = _FakeDiscordChannel()
+        self.replies: list[dict[str, Any]] = []
+        self.reply_fails = reply_fails
+
+    async def reply(self, content: str, **kwargs: Any) -> None:
+        if self.reply_fails:
+            raise RuntimeError("reply failed")
+        self.replies.append({"content": content, **kwargs})
+
+
+def test_discord_progress_updates_send_visible_replies():
+    message = _FakeDiscordMessage()
+
+    asyncio.run(
+        _send_discord_progress_updates(
+            message=message,
+            config=ProgressUpdateConfig(
+                enabled=True,
+                first_after_s=0.01,
+                interval_s=0.01,
+                max_updates=2,
+                messages=("还在处理 1", "还在处理 2"),
+            ),
+        )
+    )
+
+    assert [item["content"] for item in message.replies] == ["还在处理 1", "还在处理 2"]
+    assert message.channel.sent == []
+
+
+def test_discord_progress_updates_fallback_to_channel_send_when_reply_fails():
+    message = _FakeDiscordMessage(reply_fails=True)
+
+    asyncio.run(
+        _send_discord_progress_updates(
+            message=message,
+            config=ProgressUpdateConfig(
+                enabled=True,
+                first_after_s=0.01,
+                interval_s=0.01,
+                max_updates=1,
+                messages=("还在处理",),
+            ),
+        )
+    )
+
+    assert message.replies == []
+    assert [item["content"] for item in message.channel.sent] == ["还在处理"]

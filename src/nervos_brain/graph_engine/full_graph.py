@@ -105,6 +105,7 @@ class FullGraphState(GraphState, total=False):
     _tool_execution_trace: list[dict]
     _tool_execution_summary: str
     _llm_trace: list[dict]
+    _llm_service_tier: str
     _llm_usage_summary: dict
     _node_timings: list[dict]
     _graph_elapsed_ms: int

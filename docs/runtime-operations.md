@@ -58,6 +58,20 @@ data/discord_bot/debug_events.jsonl
 
 这些都是本地 runtime 私有数据，不提交。
 
+## 用户命令
+
+Telegram 和 Discord 都支持用户侧 `/fast` 一次性加速开关：
+
+```text
+/fast
+/fast off
+/fast status
+```
+
+`/fast` 不会立刻进入问答，只会把当前用户的下一次正常请求标记为 priority。下一条请求开始处理后，这个标记会自动清除；其他用户不受影响。它只改变模型 API 的 `service_tier="priority"`，不改变模型档位、检索策略或回答 prompt，因此更适合临时赶时间的问题。priority 通常更贵，默认不开启。
+
+状态文件默认写入 `data/runtime/fast_mode_state.json`，只保存 `platform + user_id` 的待消费标记，不保存聊天内容或密钥。该目录是本地 runtime 私有数据，不提交。
+
 ## Qdrant Docker server
 
 启动：

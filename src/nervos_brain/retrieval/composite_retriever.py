@@ -8,6 +8,7 @@ without merging their Qdrant directories or SQLite archives.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Any, Iterable
 
 from nervos_brain.core_protocols import Evidence
@@ -71,6 +72,11 @@ class CompositeRetriever:
         )
         self._final_top_k = final_top_k
         self._cfg = self.backends[0].config if self.backends else RetrievalConfig()
+        self._last_regex_summary: dict[str, Any] = {
+            "regex_queries_count": 0,
+            "regex_valid_count": 0,
+            "regex_dropped_count": 0,
+        }
 
     def rebuild_bm25(self) -> int:
         """Rebuild all backend BM25 indexes and return the total indexed size."""
@@ -85,6 +91,7 @@ class CompositeRetriever:
         query: str,
         filters: dict[str, Any] | None = None,
         top_k: int | None = None,
+        regex_queries: list[dict[str, Any]] | None = None,
     ) -> list[Evidence]:
         """Search every backend, merge duplicate anchors, and return best hits."""
         if not self.backends:
@@ -96,12 +103,34 @@ class CompositeRetriever:
         merged: dict[tuple[str, str], Evidence] = {}
         order: dict[tuple[str, str], int] = {}
         sequence = 0
+        regex_summary: dict[str, Any] = {
+            "regex_queries_count": len(regex_queries or []),
+            "regex_valid_count": 0,
+            "regex_dropped_count": 0,
+        }
+        dropped_reasons: set[str] = set()
         for backend in self.backends:
-            results = backend.retriever.search(
-                query=query,
-                filters=filters,
-                top_k=per_backend_k,
+            search_kwargs: dict[str, Any] = {
+                "query": query,
+                "filters": filters,
+                "top_k": per_backend_k,
+            }
+            if _search_accepts_regex_queries(backend.retriever):
+                search_kwargs["regex_queries"] = regex_queries
+            results = backend.retriever.search(**search_kwargs)
+            backend_regex_summary = getattr(backend.retriever, "last_regex_summary", {})
+            if not isinstance(backend_regex_summary, dict):
+                backend_regex_summary = {}
+            regex_summary["regex_valid_count"] = max(
+                int(regex_summary.get("regex_valid_count", 0) or 0),
+                int(backend_regex_summary.get("regex_valid_count", 0) or 0),
             )
+            regex_summary["regex_dropped_count"] = max(
+                int(regex_summary.get("regex_dropped_count", 0) or 0),
+                int(backend_regex_summary.get("regex_dropped_count", 0) or 0),
+            )
+            reasons = str(backend_regex_summary.get("regex_dropped_reasons", "") or "")
+            dropped_reasons.update(reason for reason in reasons.split(",") if reason)
             for row in results:
                 key = _evidence_key(row)
                 if key not in order:
@@ -123,7 +152,14 @@ class CompositeRetriever:
             key=lambda row: (_score(row), -order[_evidence_key(row)]),
             reverse=True,
         )
+        if dropped_reasons:
+            regex_summary["regex_dropped_reasons"] = ",".join(sorted(dropped_reasons))
+        self._last_regex_summary = regex_summary
         return ranked[:final_top_k]
+
+    @property
+    def last_regex_summary(self) -> dict[str, Any]:
+        return dict(self._last_regex_summary)
 
 
 def build_configured_retriever(
@@ -189,3 +225,11 @@ def _score(row: dict[str, Any]) -> float:
         return float(row.get("score", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _search_accepts_regex_queries(retriever: Any) -> bool:
+    try:
+        signature = inspect.signature(retriever.search)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "regex_queries" in signature.parameters

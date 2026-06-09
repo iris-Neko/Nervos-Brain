@@ -31,7 +31,9 @@ from .telegram_bot_protocol_adapter import (
     outbound_message_to_telegram_requests,
     telegram_update_to_message_envelope,
 )
+from .fast_mode import FastModeStateStore, fast_status_message, parse_fast_command
 from .feedback import FeedbackJsonlStore, parse_csat_callback_data
+from .progress import ProgressUpdateConfig
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +335,69 @@ class _TelegramTypingProgress:
             logger.debug("telegram typing indicator failed chat_id=%s error=%s", self._chat_id, exc)
 
 
+class _TelegramMessageProgress:
+    """Send occasional visible progress messages while the graph runs."""
+
+    def __init__(
+        self,
+        *,
+        api: Any,
+        chat_id: str | None,
+        envelope: dict[str, Any],
+        config: ProgressUpdateConfig,
+        enabled: bool,
+    ) -> None:
+        self._api = api
+        self._chat_id = str(chat_id or "").strip()
+        self._envelope = envelope
+        self._config = config
+        self._enabled = bool(enabled and self._chat_id and config.should_run)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not self._enabled:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            name="telegram-message-progress",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        if self._stop.wait(self._config.first_after_s):
+            return
+        for idx in range(self._config.max_updates):
+            self._send_once(self._config.message_for(idx))
+            if idx >= self._config.max_updates - 1:
+                return
+            if self._stop.wait(self._config.interval_s):
+                return
+
+    def _send_once(self, text: str) -> None:
+        try:
+            req = _send_text_request(
+                chat_id=self._chat_id,
+                text=text,
+                envelope=self._envelope,
+                reply_to_message_id=str(self._envelope.get("message_id") or "") or None,
+            )
+            self._api.send_request(
+                method=str(req.get("method", "sendMessage")),
+                payload=req["payload"],
+                timeout_s=10.0,
+            )
+        except Exception as exc:
+            logger.debug("telegram progress message failed chat_id=%s error=%s", self._chat_id, exc)
+
+
 class TelegramPollingGateway:
     """Token-based polling gateway that runs graph and sends replies."""
 
@@ -355,6 +420,8 @@ class TelegramPollingGateway:
         bot_username: str | None = None,
         target_elapsed_ms: int = 30000,
         max_elapsed_ms: int = 90000,
+        progress_update_config: ProgressUpdateConfig | None = None,
+        fast_mode_store: FastModeStateStore | None = None,
         max_worker_threads: int = 1,
         attachment_download_dir: str | Path = "data/telegram_bot/attachments",
     ) -> None:
@@ -376,6 +443,8 @@ class TelegramPollingGateway:
         self._bot_username = str(bot_username or "").lstrip("@").strip()
         self._target_elapsed_ms = max(0, int(target_elapsed_ms or 0))
         self._max_elapsed_ms = max(0, int(max_elapsed_ms or 0))
+        self._progress_update_config = progress_update_config or ProgressUpdateConfig(enabled=False)
+        self._fast_mode_store = fast_mode_store or FastModeStateStore()
         self._max_worker_threads = max(1, min(int(max_worker_threads or 1), 32))
         self._attachment_download_dir = Path(attachment_download_dir).expanduser()
         self._debug_write_lock = threading.Lock()
@@ -563,7 +632,23 @@ class TelegramPollingGateway:
                 "sent_count": 0,
             }
 
+        fast_command = parse_fast_command(
+            str(envelope.get("command", "") or ""),
+            str(envelope.get("command_args", "") or ""),
+        )
+        if fast_command is not None:
+            return self._process_fast_command(
+                update_id=update_id,
+                envelope=envelope,
+                chat_id=chat_id or raw_chat_id,
+                action=fast_command.action,
+                message=fast_command.message,
+                dry_run=dry_run,
+            )
+
         state = message_envelope_to_graph_state(envelope)
+        if self._consume_fast_mode(envelope):
+            state["_llm_service_tier"] = "priority"
         request_started_ts_ms = int(time.time() * 1000)
         graph_start = time.perf_counter()
         state["_request_started_ts_ms"] = request_started_ts_ms
@@ -583,12 +668,20 @@ class TelegramPollingGateway:
         request_id = str(state.get("request_id", "unknown"))
 
         with log_request_context(request_id):
-            progress = _TelegramTypingProgress(
+            typing_progress = _TelegramTypingProgress(
                 api=self._api,
                 chat_id=chat_id or raw_chat_id,
                 enabled=not dry_run,
             )
-            progress.start()
+            message_progress = _TelegramMessageProgress(
+                api=self._api,
+                chat_id=chat_id or raw_chat_id,
+                envelope=envelope,
+                config=self._progress_update_config,
+                enabled=not dry_run,
+            )
+            typing_progress.start()
+            message_progress.start()
             try:
                 result = self._graph_runner(state)
             except Exception:
@@ -605,7 +698,8 @@ class TelegramPollingGateway:
                     }
                 }
             finally:
-                progress.stop()
+                message_progress.stop()
+                typing_progress.stop()
         graph_elapsed_ms = int((time.perf_counter() - graph_start) * 1000)
         result["_graph_elapsed_ms"] = graph_elapsed_ms
         result["_request_started_ts_ms"] = request_started_ts_ms
@@ -667,6 +761,55 @@ class TelegramPollingGateway:
             "request_id": state.get("request_id"),
             "sent_count": sent_count if not dry_run else len(send_reqs),
         }
+
+    def _process_fast_command(
+        self,
+        *,
+        update_id: int | None,
+        envelope: dict[str, Any],
+        chat_id: str | None,
+        action: str,
+        message: str,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        context = envelope.get("context", {}) if isinstance(envelope.get("context"), dict) else {}
+        user_id = str(context.get("user_id", "") or "")
+        platform = str(context.get("platform", "telegram") or "telegram")
+        if action == "enable":
+            if not dry_run:
+                self._fast_mode_store.enable_next(platform=platform, user_id=user_id)
+            text = message
+        elif action == "disable":
+            if not dry_run:
+                self._fast_mode_store.disable(platform=platform, user_id=user_id)
+            text = message
+        elif action == "status":
+            text = fast_status_message(
+                pending=self._fast_mode_store.is_pending(platform=platform, user_id=user_id)
+            )
+        else:
+            text = message
+
+        if not dry_run:
+            self._api.send_requests(
+                [_send_text_request(chat_id=chat_id, text=text, envelope=envelope)]
+            )
+        return {
+            "update_id": update_id,
+            "chat_id": chat_id,
+            "ignored": False,
+            "reason": "fast_command",
+            "request_id": None,
+            "sent_count": 0 if dry_run else 1,
+            "fast_action": action,
+        }
+
+    def _consume_fast_mode(self, envelope: dict[str, Any]) -> bool:
+        context = envelope.get("context", {}) if isinstance(envelope.get("context"), dict) else {}
+        return self._fast_mode_store.consume_next(
+            platform=str(context.get("platform", "telegram") or "telegram"),
+            user_id=str(context.get("user_id", "") or ""),
+        )
 
     def _prepare_message_attachments(self, *, envelope: dict[str, Any], request_id: str) -> None:
         attachments = envelope.get("attachments", [])
@@ -775,6 +918,11 @@ class TelegramPollingGateway:
         envelope: dict[str, Any],
     ) -> None:
         reply_context = _reply_context_from_envelope(envelope)
+        if envelope.get("reply_to_message_id"):
+            state["recent_messages"] = []
+            state["conversation_context"] = reply_context
+            return
+
         svc = self._memory_service
         if svc is None or not hasattr(svc, "list_recent_message_events"):
             if reply_context:
@@ -1040,11 +1188,16 @@ class TelegramPollingGateway:
                 "user_id": str(context.get("user_id", "")),
                 "message_id": str(envelope.get("message_id", "")),
                 "incoming_reply_to_message_id": str(envelope.get("reply_to_message_id", "")),
+                "reply_to_role": str(envelope.get("reply_to_role", "")),
+                "reply_to_content_preview": _preview_text(envelope.get("reply_to_content", ""), limit=500),
+                "conversation_context_preview": _preview_text(state.get("conversation_context", ""), limit=900),
+                "recent_messages_preview": _debug_recent_messages_preview(state.get("recent_messages")),
                 "outbound_reply_to_message_id": str(outbound.get("reply_to_message_id", "")),
                 "first_send_reply_to_message_id": _first_send_reply_to_message_id(send_reqs),
                 "content_preview": _message_text_preview(_extract_message_payload(update), limit=240),
                 "normalized_content": str(envelope.get("content", ""))[:240],
                 "route_decision": str(result.get("_route_decision") or state.get("_route_decision") or ""),
+                "llm_service_tier": str(result.get("_llm_service_tier") or state.get("_llm_service_tier") or ""),
                 "retrieval_policy": str(result.get("retrieval_policy") or state.get("retrieval_policy") or ""),
                 "reflection_decision": str(result.get("reflection_decision") or state.get("reflection_decision") or ""),
                 "reflection_reasoning": str(result.get("reflection_reasoning") or state.get("reflection_reasoning") or "")[:500],
@@ -1240,7 +1393,7 @@ def _is_bot_command_for_this_bot(
     bot_username: str,
 ) -> bool:
     command = str(envelope.get("command", "") or "").split("@", 1)[0].lower()
-    known_commands = {"/ask", "/help", "/start", "/feedback"}
+    known_commands = {"/ask", "/help", "/start", "/feedback", "/fast"}
     if command not in known_commands:
         return False
     raw = _raw_command_target(_message_text(msg))
@@ -1360,7 +1513,21 @@ def _format_recent_messages(rows: list[Any], limit_chars: int = 1800) -> str:
 
 def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
     reply_text = re.sub(r"\s+", " ", str(envelope.get("reply_to_content", "") or "")).strip()
+    reply_id = str(envelope.get("reply_to_message_id", "") or "").strip()
     if not reply_text:
+        if reply_id:
+            role = str(envelope.get("reply_to_role", "") or "").strip().lower()
+            if role in {"assistant", "bot"}:
+                label = "assistant"
+            elif role == "user":
+                label = "user"
+            else:
+                label = "replied_message"
+            return (
+                f"当前消息正在回复一条 {label} 消息（message_id={reply_id}），"
+                "但平台没有提供被回复消息内容。不要从普通历史记录猜测被回复内容；"
+                "如果当前短追问无法独立理解，应请用户补充或重发被回复内容。"
+            )
         return ""
     if len(reply_text) > 700:
         reply_text = reply_text[:700].rstrip() + "..."
@@ -1372,6 +1539,29 @@ def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
     else:
         label = "replied_message"
     return f"当前消息正在回复这条 {label} 消息: {reply_text}"
+
+
+def _preview_text(value: Any, *, limit: int = 300) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "..."
+    return text
+
+
+def _debug_recent_messages_preview(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "role": str(item.get("role", "")),
+                "content_preview": _preview_text(item.get("content", ""), limit=180),
+            }
+        )
+    return rows
 
 
 def _normalized_message_text(text: Any) -> str:
@@ -1616,6 +1806,7 @@ def _debug_llm_trace(value: Any) -> list[dict[str, Any]]:
                 "model": str(item.get("model", "")),
                 "tier": str(item.get("tier", "")),
                 "reasoning_effort": str(item.get("reasoning_effort", "")),
+                "service_tier": str(item.get("service_tier", "")),
                 "json_mode": bool(item.get("json_mode", False)),
                 "max_tokens": _int_like(item.get("max_tokens", 0)),
                 "elapsed_ms": _int_like(item.get("elapsed_ms", 0)),
@@ -1795,12 +1986,15 @@ def _send_text_request(
     chat_id: str | None,
     text: str,
     envelope: dict[str, Any],
+    reply_to_message_id: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": _coerce_numeric_or_keep(chat_id or ""),
         "text": text,
         "disable_web_page_preview": True,
     }
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = _coerce_numeric_or_keep(reply_to_message_id)
     context = envelope.get("context", {})
     if isinstance(context, dict) and context.get("thread_id") is not None:
         payload["message_thread_id"] = _coerce_numeric_or_keep(context["thread_id"])

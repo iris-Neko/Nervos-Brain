@@ -46,6 +46,7 @@ DEFAULT_TARGETS = [
     "https://github.com/ckb-devrel",
     "https://github.com/RGBPlusPlus",
     "https://github.com/nervosnetwork/fiber",
+    "https://github.com/nervosnetwork/tentacle",
     "https://github.com/appfi5",
 ]
 

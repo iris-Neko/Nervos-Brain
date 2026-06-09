@@ -19,7 +19,9 @@ from nervos_brain.tool_runtime.telegram_bot_runtime import (
     TelegramPollingGateway,
     TelegramUpdateOffsetStore,
 )
+from nervos_brain.tool_runtime.fast_mode import FastModeStateStore
 from nervos_brain.tool_runtime.feedback import FeedbackJsonlStore
+from nervos_brain.tool_runtime.progress import ProgressUpdateConfig
 
 
 def _load_script_module(name: str, filename: str):
@@ -593,6 +595,75 @@ def test_group_reply_to_bot_injects_replied_message_context():
     assert "CCC 相关" in captured["conversation_context"]
 
 
+def test_group_reply_to_bot_does_not_mix_unrelated_recent_context():
+    fake_api = _FakeAPI()
+    memory = _FakeMemory(
+        recent=[
+            {"role": "user", "content": "Fiber WASM 是怎么实现的？"},
+            {"role": "assistant", "content": "WASM 可以放一些轻量验证逻辑。"},
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.update(state)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        memory_service=memory,
+        bot_user_id="999",
+        bot_username="NBCKB_Bot",
+    )
+
+    update = _sample_update(text="小白版的解释，你说一下", reply_to_bot=True)
+    update["message"]["reply_to_message"]["text"] = "CKB 通常指 Nervos CKB，是 Nervos 生态里的公链基础层。"
+
+    row = gateway.process_update(update, dry_run=False)
+
+    assert row["ignored"] is False
+    assert memory.read_calls == []
+    assert captured["recent_messages"] == []
+    assert "CKB 通常指 Nervos CKB" in captured["conversation_context"]
+    assert "Fiber WASM" not in captured["conversation_context"]
+
+
+def test_group_reply_to_bot_missing_snapshot_does_not_guess_from_recent_context():
+    fake_api = _FakeAPI()
+    memory = _FakeMemory(
+        recent=[
+            {"role": "user", "content": "Fiber WASM 是怎么实现的？"},
+            {"role": "assistant", "content": "WASM 可以放一些轻量验证逻辑。"},
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.update(state)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        memory_service=memory,
+        bot_user_id="999",
+        bot_username="NBCKB_Bot",
+    )
+
+    update = _sample_update(text="小白版的解释，你说一下", reply_to_bot=True)
+    del update["message"]["reply_to_message"]["text"]
+
+    row = gateway.process_update(update, dry_run=False)
+
+    assert row["ignored"] is False
+    assert memory.read_calls == []
+    assert captured["recent_messages"] == []
+    assert "平台没有提供被回复消息内容" in captured["conversation_context"]
+    assert "不要从普通历史记录猜测被回复内容" in captured["conversation_context"]
+    assert "Fiber WASM" not in captured["conversation_context"]
+
+
 def test_group_reply_to_bot_outbound_override_still_replies_to_current_user_message():
     fake_api = _FakeAPI()
 
@@ -628,6 +699,61 @@ def test_group_reply_to_bot_outbound_override_still_replies_to_current_user_mess
 
     assert row["ignored"] is False
     assert fake_api.sent_requests[-1]["payload"]["reply_to_message_id"] == 1
+
+
+def test_process_update_sends_visible_progress_for_slow_graph():
+    fake_api = _FakeAPI()
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.04)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        progress_update_config=ProgressUpdateConfig(
+            enabled=True,
+            first_after_s=0.01,
+            interval_s=0.01,
+            max_updates=2,
+            messages=("还在处理 1", "还在处理 2"),
+        ),
+    )
+
+    row = gateway.process_update(_sample_update(text="@NBCKB_Bot hello"), dry_run=False)
+
+    assert row["ignored"] is False
+    progress_requests = [
+        item for item in fake_api.callback_requests
+        if item["method"] == "sendMessage" and str(item["payload"].get("text", "")).startswith("还在处理")
+    ]
+    assert len(progress_requests) >= 1
+    assert progress_requests[0]["payload"]["reply_to_message_id"] == 1
+    assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
+
+
+def test_process_update_does_not_send_visible_progress_for_fast_graph():
+    fake_api = _FakeAPI()
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {"_final_response": {"request_id": state["request_id"], "text": "ok"}},
+        progress_update_config=ProgressUpdateConfig(
+            enabled=True,
+            first_after_s=0.05,
+            interval_s=0.01,
+            max_updates=1,
+            messages=("还在处理",),
+        ),
+    )
+
+    row = gateway.process_update(_sample_update(text="@NBCKB_Bot hello"), dry_run=False)
+
+    assert row["ignored"] is False
+    assert [
+        item for item in fake_api.callback_requests
+        if item["method"] == "sendMessage" and item["payload"].get("text") == "还在处理"
+    ] == []
+    assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
 
 
 def test_process_update_writes_debug_event(tmp_path: Path):
@@ -800,6 +926,104 @@ def test_group_command_for_other_bot_is_ignored():
     assert calls == []
     assert fake_api.chat_actions == []
     assert fake_api.sent_requests == []
+
+
+def test_fast_command_sets_one_shot_priority_for_next_telegram_request(tmp_path: Path):
+    fake_api = _FakeAPI()
+    store = FastModeStateStore(tmp_path / "fast.json")
+    captured: list[dict[str, Any]] = []
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.append(dict(state))
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        bot_username="NBCKB_Bot",
+        fast_mode_store=store,
+    )
+
+    command_row = gateway.process_update(_sample_update(text="/fast@NBCKB_Bot"), dry_run=False)
+    first_row = gateway.process_update(_sample_update(update_id=101, text="@NBCKB_Bot ckb是什么"), dry_run=False)
+    second_row = gateway.process_update(_sample_update(update_id=102, text="@NBCKB_Bot fiber是什么"), dry_run=False)
+
+    assert command_row["reason"] == "fast_command"
+    assert command_row["fast_action"] == "enable"
+    assert "已开启 fast 模式" in fake_api.sent_requests[0]["payload"]["text"]
+    assert first_row["ignored"] is False
+    assert second_row["ignored"] is False
+    assert len(captured) == 2
+    assert captured[0]["_llm_service_tier"] == "priority"
+    assert "_llm_service_tier" not in captured[1]
+    assert store.is_pending(platform="telegram", user_id="42") is False
+
+
+def test_fast_command_is_user_scoped_for_telegram(tmp_path: Path):
+    fake_api = _FakeAPI()
+    store = FastModeStateStore(tmp_path / "fast.json")
+    captured: list[dict[str, Any]] = []
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.append(dict(state))
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        bot_username="NBCKB_Bot",
+        fast_mode_store=store,
+    )
+
+    gateway.process_update(_sample_update(text="/fast@NBCKB_Bot", user_id=42), dry_run=False)
+    gateway.process_update(_sample_update(update_id=101, text="@NBCKB_Bot ckb是什么", user_id=7), dry_run=False)
+    gateway.process_update(_sample_update(update_id=102, text="@NBCKB_Bot ckb是什么", user_id=42), dry_run=False)
+
+    assert "_llm_service_tier" not in captured[0]
+    assert captured[1]["_llm_service_tier"] == "priority"
+
+
+def test_fast_off_and_status_do_not_enter_telegram_graph(tmp_path: Path):
+    fake_api = _FakeAPI()
+    store = FastModeStateStore(tmp_path / "fast.json")
+    calls: list[dict[str, Any]] = []
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {},
+        bot_username="NBCKB_Bot",
+        fast_mode_store=store,
+    )
+
+    gateway.process_update(_sample_update(text="/fast@NBCKB_Bot"), dry_run=False)
+    status_row = gateway.process_update(_sample_update(update_id=101, text="/fast@NBCKB_Bot status"), dry_run=False)
+    off_row = gateway.process_update(_sample_update(update_id=102, text="/fast@NBCKB_Bot off"), dry_run=False)
+
+    assert status_row["reason"] == "fast_command"
+    assert off_row["fast_action"] == "disable"
+    assert calls == []
+    assert "已待命" in fake_api.sent_requests[-2]["payload"]["text"]
+    assert "已取消 fast 模式" in fake_api.sent_requests[-1]["payload"]["text"]
+    assert store.is_pending(platform="telegram", user_id="42") is False
+
+
+def test_fast_command_for_other_telegram_bot_is_ignored(tmp_path: Path):
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    store = FastModeStateStore(tmp_path / "fast.json")
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {},
+        bot_username="NBCKB_Bot",
+        fast_mode_store=store,
+    )
+
+    row = gateway.process_update(_sample_update(text="/fast@OtherBot"), dry_run=False)
+
+    assert row["ignored"] is True
+    assert row["reason"] == "not_mentioned"
+    assert calls == []
+    assert fake_api.sent_requests == []
+    assert store.is_pending(platform="telegram", user_id="42") is False
 
 
 def test_process_update_ignores_non_message_update():

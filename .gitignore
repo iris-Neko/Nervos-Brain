@@ -25,6 +25,7 @@ logs/
 data/logs/
 data/telegram_bot/
 data/discord_bot/
+data/runtime/
 data/product_demo/
 data/tmp/
 data/ingest_state/

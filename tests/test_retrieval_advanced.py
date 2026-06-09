@@ -106,6 +106,19 @@ def _write_channel_manager(writer):
     )
 
 
+def _write_nervos_brain(writer):
+    writer.write(
+        source="nervos_talk",
+        doc_type="forum_post",
+        url="https://talk.nervos.org/t/spark-program-nervos-brain/9995/1",
+        anchor="doc:nervos-talk-9995#post:1",
+        title="Spark Program | Nervos Brain - Agentic RAG",
+        summary="Nervos Brain project proposal and weekly updates.",
+        keywords="Nervos Brain,Spark Program,Agentic RAG",
+        raw_text="Nervos Brain is a developer onboarding engine powered by Agentic RAG.",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # config
 # ═══════════════════════════════════════════════════════════════════════════
@@ -593,6 +606,42 @@ def test_retriever_broad_resource_query_uses_vector_without_filters(monkeypatch,
 
     assert results
     assert calls[0]["filters"] == {}
+
+
+def test_retriever_llm_regex_query_hard_recalls_named_project(
+    monkeypatch, cfg, qdrant, archive, writer
+):
+    _write_nervos_brain(writer)
+    retriever = MultiRetriever(qdrant_store=qdrant, archive_store=archive, config=cfg)
+    retriever.rebuild_bm25()
+    monkeypatch.setattr(retriever, "_vector_search", lambda *_args, **_kwargs: [])
+    results = retriever.search(
+        "我听说有一个nervos brain的项目，有没有文档可以借鉴一下",
+        regex_queries=[
+            {
+                "label": "Nervos Brain",
+                "pattern": r"(?i)\bnervos[\s_-]+brain\b",
+                "fields": ["title", "keywords", "anchor", "url", "summary"],
+            }
+        ],
+        top_k=3,
+    )
+
+    assert results[0]["anchor"] == "doc:nervos-talk-9995#post:1"
+    assert results[0]["payload"]["regex_valid_count"] == 1
+
+
+def test_retriever_rejects_dangerous_regex_and_continues(monkeypatch, populated_retriever):
+    monkeypatch.setattr(populated_retriever, "_vector_search", lambda *_args, **_kwargs: [])
+    results = populated_retriever.search(
+        "anything",
+        regex_queries=[{"label": "broad", "pattern": r".*", "fields": ["title"]}],
+        top_k=3,
+    )
+
+    assert isinstance(results, list)
+    if results:
+        assert results[0]["payload"]["regex_dropped_count"] == 1
 
 
 def test_retriever_returns_evidence_protocol(populated_retriever):

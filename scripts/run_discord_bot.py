@@ -34,7 +34,9 @@ from nervos_brain.tool_runtime.discord_bot_runtime import (  # noqa: E402
     DiscordBotRuntimeError,
     DiscordGateway,
 )
+from nervos_brain.tool_runtime.fast_mode import FastModeStateStore  # noqa: E402
 from nervos_brain.tool_runtime.feedback import FeedbackJsonlStore  # noqa: E402
+from nervos_brain.tool_runtime.progress import ProgressUpdateConfig  # noqa: E402
 
 logger = logging.getLogger("nervos_brain.discord_bot")
 
@@ -86,6 +88,11 @@ def _load_discord_bot_cfg(project_cfg: dict[str, Any]) -> dict[str, Any]:
     if isinstance(section, dict):
         return section
     return {}
+
+
+def _load_progress_update_cfg(project_cfg: dict[str, Any]) -> ProgressUpdateConfig:
+    section = project_cfg.get("progress_updates", {})
+    return ProgressUpdateConfig.from_mapping(section if isinstance(section, dict) else {})
 
 
 def _build_runtime(*, model: str, memory_db: Path) -> tuple[FullGraphRuntime, MemoryService]:
@@ -163,6 +170,7 @@ def _cfg_int(cfg: dict[str, Any], key: str, default: int) -> int:
 def main() -> int:
     project_cfg = _load_project_cfg()
     bot_cfg = _load_discord_bot_cfg(project_cfg)
+    progress_update_cfg = _load_progress_update_cfg(project_cfg)
     default_model = ""
 
     parser = argparse.ArgumentParser(description="Run Discord Bot gateway.")
@@ -214,6 +222,11 @@ def main() -> int:
         "--debug-log-file",
         default=str(bot_cfg.get("debug_log_file", "data/discord_bot/debug_events.jsonl")),
         help="JSONL path for per-message Discord debug events.",
+    )
+    parser.add_argument(
+        "--fast-mode-state-file",
+        default=str(bot_cfg.get("fast_mode_state_file", "data/runtime/fast_mode_state.json")),
+        help="JSON path for one-shot per-user /fast state.",
     )
     parser.add_argument(
         "--memory-context-limit",
@@ -290,6 +303,7 @@ def main() -> int:
     graph = build_full_graph()
     feedback_file = resolve_project_path(args.feedback_file)
     debug_log_file = resolve_project_path(args.debug_log_file) if str(args.debug_log_file).strip() else None
+    fast_mode_state_file = resolve_project_path(args.fast_mode_state_file)
     allowed_channel_ids = _parse_id_set(args.allowed_channel_id)
     allowed_guild_ids = _parse_id_set(args.allowed_guild_id)
 
@@ -312,6 +326,7 @@ def main() -> int:
         target_elapsed_ms=max(0, int(args.target_elapsed_ms)),
         max_elapsed_ms=max(0, int(args.max_elapsed_ms)),
         attachment_max_bytes=max(1024, int(args.attachment_max_bytes)),
+        fast_mode_store=FastModeStateStore(fast_mode_state_file),
     )
     bot_runtime = DiscordBotRuntime(
         config=DiscordBotConfig(
@@ -320,6 +335,7 @@ def main() -> int:
         ),
         gateway=gateway,
         max_worker_threads=max(1, int(args.max_worker_threads)),
+        progress_update_config=progress_update_cfg,
     )
     logger.info(
         "Discord beta controls: allowed_guild_ids=%s allowed_channel_ids=%s append_csat=%s mention_only_in_guild=%s respond_to_bot_replies=%s feedback_file=%s debug_log_file=%s",

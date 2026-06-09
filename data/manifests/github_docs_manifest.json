@@ -7,6 +7,7 @@
     "https://github.com/ckb-devrel",
     "https://github.com/nervosnetwork",
     "https://github.com/nervosnetwork/fiber",
+    "https://github.com/nervosnetwork/tentacle",
     "https://github.com/web5fans"
   ],
   "targets_hash": "f2818be74a8e2610",
@@ -1040,6 +1041,13 @@
       "commit": "5caa1afe2116764be071a08bcf8b10cc16b4feaf",
       "doc_count": 6,
       "updated_ts_ms": 1778598185496
+    },
+    {
+      "repo": "nervosnetwork/tentacle",
+      "branch": "master",
+      "commit": "11f4d1c506e6b55d7ea1259c140b70a8c2448ea3",
+      "doc_count": 12,
+      "updated_ts_ms": 1779281632562
     },
     {
       "repo": "nervosnetwork/tippy",

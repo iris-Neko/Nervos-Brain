@@ -337,6 +337,161 @@ class TestDirectAnswerScenario:
         assert "CKB 是什么" in captured["direct_user_prompt"]
         assert "CKB 是什么" in result["_final_response"]["text"]
 
+    def test_reply_context_is_not_overwritten_by_recent_messages(self):
+        from nervos_brain.graph_engine.full_graph import build_full_graph
+
+        captured: dict[str, str] = {}
+
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
+            _ = model
+            if "信息缺口评估" in system_prompt:
+                captured["info_gap_user_prompt"] = user_prompt
+                return {
+                    "decision": "answer_direct",
+                    "retrieval_policy": "none",
+                    "info_needs": [],
+                    "reasoning": "reply follow-up",
+                }
+            return {"decision": "accept_answer", "uncertainty_score": 0.1}
+
+        def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048):
+            _ = system_prompt, json_mode, model, temperature, max_tokens
+            captured["direct_user_prompt"] = user_prompt
+            return "小白版就是：CKB 可以先理解成 Nervos 的底层账本和资产容器。"
+
+        reply_context = (
+            "当前消息正在回复这条 assistant 消息: "
+            "CKB 通常指 Nervos CKB，是 Nervos 生态里的公链基础层。"
+        )
+        state = _make_state(
+            user_message={"content": "好，小白版的解释，你说一下"},
+            conversation_context=reply_context,
+            recent_messages=[
+                {"role": "user", "content": "Fiber WASM 是怎么实现的？", "created_ts_ms": 1000},
+                {"role": "assistant", "content": "Fiber WASM 需要查源码。", "created_ts_ms": 1100},
+            ],
+        )
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm", mock_call_llm), \
+             patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
+            result = build_full_graph().invoke(state)
+
+        assert reply_context in captured["info_gap_user_prompt"]
+        assert reply_context in captured["direct_user_prompt"]
+        assert "Fiber WASM" not in captured["info_gap_user_prompt"]
+        assert "Fiber WASM" not in captured["direct_user_prompt"]
+        assert "CKB" in result["_final_response"]["text"]
+
+    def test_self_contained_question_gates_plain_recent_history(self):
+        from nervos_brain.graph_engine.full_graph import build_full_graph
+
+        captured: dict[str, str] = {}
+
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
+            _ = model
+            if "信息缺口评估" in system_prompt:
+                captured["info_gap_user_prompt"] = user_prompt
+                return {
+                    "decision": "has_needs",
+                    "retrieval_policy": "single",
+                    "info_needs": [
+                        {
+                            "kind": "latest_spec",
+                            "question": "Tentacle 通信方式和协议",
+                            "required": False,
+                        }
+                    ],
+                }
+            if "检索规划器" in system_prompt:
+                captured["planner_user_prompt"] = user_prompt
+                return {
+                    "plan_id": "p1",
+                    "rationale": "current question only",
+                    "steps": [
+                        {
+                            "step_id": "step_1",
+                            "tool": "qdrant_search",
+                            "query": "tentacle transport protocol yamux secio identify discovery",
+                            "top_k": 5,
+                        }
+                    ],
+                    "parallel_groups": [["step_1"]],
+                    "budget": {"max_tool_calls": 1},
+                }
+            return {"decision": "accept_answer", "uncertainty_score": 0.1}
+
+        class Retriever:
+            def search(self, query: str, filters=None, top_k: int = 5, regex_queries=None):
+                _ = query, filters, top_k, regex_queries
+                return [
+                    {
+                        "id": "ev-1",
+                        "source": "qdrant",
+                        "title": "tentacle README",
+                        "url": "https://github.com/nervosnetwork/tentacle/blob/master/README.md",
+                        "anchor": "a1",
+                        "snippet": "Tentacle is a multiplexed p2p network framework.",
+                        "score": 0.9,
+                        "payload": {"source": "github_docs"},
+                        "hash": "h1",
+                        "retrieved_ts_ms": 1,
+                    },
+                    {
+                        "id": "ev-2",
+                        "source": "qdrant",
+                        "title": "secio README",
+                        "url": "https://github.com/nervosnetwork/tentacle/blob/master/secio/README.md",
+                        "anchor": "a2",
+                        "snippet": "Secio is an encrypted communication protocol library.",
+                        "score": 0.8,
+                        "payload": {"source": "github_docs"},
+                        "hash": "h2",
+                        "retrieved_ts_ms": 1,
+                    },
+                ]
+
+        def mock_call_llm(system_prompt, user_prompt, **_kwargs):
+            _ = system_prompt, user_prompt
+            return "Tentacle 支持 P2P 多路复用和加密通信。[1][2]"
+
+        state = _make_state(
+            user_message={"content": "tentacle支持哪些通信方式和协议？"},
+            recent_messages=[
+                {"role": "user", "content": "我要做最好的 CKB agent"},
+                {"role": "assistant", "content": "可以参考 Nervos Brain 项目"},
+            ],
+            retriever=Retriever(),
+        )
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm", mock_call_llm), \
+             patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
+            result = build_full_graph().invoke(state)
+
+        assert "上下文门控" in captured["info_gap_user_prompt"]
+        assert "上下文门控" in captured["planner_user_prompt"]
+        assert "Nervos Brain" not in captured["info_gap_user_prompt"]
+        assert "Nervos Brain" not in captured["planner_user_prompt"]
+        assert "CKB agent" not in captured["info_gap_user_prompt"]
+        assert "CKB agent" not in captured["planner_user_prompt"]
+        assert result["conversation_context"].startswith("上下文门控")
+
+    def test_self_contained_question_overrides_plain_runtime_context(self):
+        from nervos_brain.graph_engine.full_nodes import _conversation_context_from_state
+
+        state = _make_state(
+            user_message={"content": "tentacle支持哪些通信方式和协议？"},
+            conversation_context=(
+                "user: 我要做最好的 CKB agent\n"
+                "assistant: 可以参考 Nervos Brain 项目"
+            ),
+        )
+
+        context = _conversation_context_from_state(state)
+
+        assert context.startswith("上下文门控")
+        assert "Nervos Brain" not in context
+        assert "CKB agent" not in context
+
     def test_direct_answer_passes_image_paths_to_llm(self, tmp_path):
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
@@ -562,11 +717,17 @@ class TestSingleRetrievalScenario:
 
         class FakeRetriever:
             def __init__(self) -> None:
-                self.calls: list[dict | None] = []
+                self.calls: list[dict[str, Any]] = []
 
-            def search(self, query: str, filters=None, top_k: int = 5):
-                _ = query, top_k
-                self.calls.append(filters)
+            def search(self, query: str, filters=None, top_k: int = 5, regex_queries=None):
+                self.calls.append(
+                    {
+                        "query": query,
+                        "filters": filters,
+                        "top_k": top_k,
+                        "regex_queries": regex_queries,
+                    }
+                )
                 return [
                     {
                         "id": "ccc-transfer",
@@ -576,7 +737,13 @@ class TestSingleRetrievalScenario:
                         "anchor": "ccc-transfer",
                         "snippet": "TypeScript transfer example.",
                         "score": 0.9,
-                        "payload": {"source": "github_code", "backend": "retrieval_github_code"},
+                        "payload": {
+                            "source": "github_code",
+                            "backend": "retrieval_github_code",
+                            "regex_queries_count": 1,
+                            "regex_valid_count": 1,
+                            "regex_dropped_count": 0,
+                        },
                         "hash": "h-ccc",
                         "retrieved_ts_ms": 1,
                     }
@@ -594,6 +761,13 @@ class TestSingleRetrievalScenario:
                         "tool": "qdrant_search",
                         "query": "TS/JS CKB transfer CCC",
                         "filters": {},
+                        "regex_queries": [
+                            {
+                                "label": "CCC",
+                                "pattern": r"(?i)\bccc\b",
+                                "fields": ["title", "keywords"],
+                            }
+                        ],
                         "filter_notes": ["mapped_source:docs->github_docs"],
                         "top_k": 5,
                     }
@@ -604,10 +778,24 @@ class TestSingleRetrievalScenario:
 
         out = retrieval_executor(state)
 
-        assert retriever.calls == [None]
+        assert retriever.calls == [
+            {
+                "query": "TS/JS CKB transfer CCC",
+                "filters": None,
+                "top_k": 5,
+                "regex_queries": [
+                    {
+                        "label": "CCC",
+                        "pattern": r"(?i)\bccc\b",
+                        "fields": ["title", "keywords"],
+                    }
+                ],
+            }
+        ]
         assert out["_tool_execution_trace"][0]["filter_notes"] == [
             "mapped_source:docs->github_docs"
         ]
+        assert out["_tool_execution_trace"][0]["regex_valid_count"] == 1
 
     def test_retrieval_executor_retries_empty_filtered_qdrant_without_filters(self):
         from nervos_brain.graph_engine.full_nodes import retrieval_executor
@@ -751,8 +939,8 @@ class TestSingleRetrievalScenario:
 
         call_counter = {"planner": 0, "pre": 0, "post": 0, "answer": 0}
 
-        def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
-            _ = user_prompt, model
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None, service_tier=None, **_kwargs):
+            _ = user_prompt, model, service_tier
             if "模型档位路由器" in system_prompt:
                 return {"tier": "mini_high", "reasoning": "technical graph node", "confidence": 0.9}
             if "信息缺口评估" in system_prompt:
@@ -1283,6 +1471,54 @@ class TestRetrieverPlannerNode:
 
         assert out["retrieval_plan"]["steps"][0]["tool"] == "qdrant_search"
 
+    def test_qdrant_regex_queries_are_preserved(self):
+        from nervos_brain.graph_engine.full_nodes import retriever_planner
+        state = _make_state(
+            user_message={"content": "我听说有一个 nervos brain 的项目"},
+            info_needs=[{"kind": "historical_consensus", "question": "Nervos Brain 项目背景", "required": False}],
+        )
+        mock_json_responses = {
+            "检索规划": {
+                "plan_id": "p-regex",
+                "rationale": "named project hard recall",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "tool": "qdrant_search",
+                        "query": "Nervos Brain Spark Program",
+                        "filters": {},
+                        "regex_queries": [
+                            {
+                                "label": "Nervos Brain",
+                                "pattern": r"(?i)\bnervos[\s_-]+brain\b",
+                                "fields": ["title", "keywords", "anchor", "url", "summary", "invalid_field"],
+                                "reason": "用户点名真实项目名",
+                            }
+                        ],
+                        "top_k": 5,
+                    }
+                ],
+                "parallel_groups": [["s1"]],
+                "budget": {"max_tool_calls": 1},
+            }
+        }
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            _mock_call_llm_json_factory(mock_json_responses),
+        ):
+            out = retriever_planner(state)
+
+        step = out["retrieval_plan"]["steps"][0]
+        assert step["tool"] == "qdrant_search"
+        assert step["regex_queries"] == [
+            {
+                "label": "Nervos Brain",
+                "pattern": r"(?i)\bnervos[\s_-]+brain\b",
+                "fields": ["title", "keywords", "anchor", "url", "summary"],
+                "reason": "用户点名真实项目名",
+            }
+        ]
+
 
 class TestInfoGapAssessorNode:
     """InfoGapAssessor 行为测试。"""
@@ -1590,8 +1826,8 @@ class TestFullGraphDebugState:
                 }
             return {"decision": "accept_answer", "uncertainty_score": 0.1}
 
-        def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048, reasoning_effort=None, verbosity=None):
-            _ = system_prompt, user_prompt, json_mode, model, temperature, max_tokens, reasoning_effort, verbosity
+        def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048, reasoning_effort=None, verbosity=None, service_tier=None):
+            _ = system_prompt, user_prompt, json_mode, model, temperature, max_tokens, reasoning_effort, verbosity, service_tier
             return "我是 Nervos Brain。"
 
         state = _make_state(
@@ -1609,6 +1845,44 @@ class TestFullGraphDebugState:
         assert result.get("_llm_trace")
         assert result["_llm_trace"][0]["kind"] == "router_json"
         assert result.get("_llm_usage_summary", {}).get("calls", 0) >= 2
+
+    def test_llm_service_tier_survives_graph_trace(self):
+        from nervos_brain.graph_engine.full_graph import build_full_graph
+
+        calls: list[dict[str, Any]] = []
+
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None, service_tier=None, **_kwargs):
+            calls.append({"kind": "json", "service_tier": service_tier})
+            _ = user_prompt, model
+            if "模型档位路由器" in system_prompt:
+                return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
+            if "信息缺口评估" in system_prompt:
+                return {
+                    "decision": "answer_direct",
+                    "retrieval_policy": "none",
+                    "info_needs": [],
+                    "reasoning": "low-risk direct answer",
+                }
+            return {"decision": "accept_answer", "uncertainty_score": 0.1}
+
+        def mock_call_llm(system_prompt, user_prompt, *, service_tier=None, **_kwargs):
+            calls.append({"kind": "text", "service_tier": service_tier})
+            _ = system_prompt, user_prompt
+            return "我是 Nervos Brain。"
+
+        state = _make_state(
+            user_message={"content": "你是谁"},
+            _llm_service_tier="priority",
+        )
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm", mock_call_llm), \
+             patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
+            result = build_full_graph().invoke(state)
+
+        assert calls
+        assert all(call["service_tier"] == "priority" for call in calls)
+        assert result["_llm_trace"]
+        assert all(row["service_tier"] == "priority" for row in result["_llm_trace"])
 
 
 class TestPromptBoundaries:
@@ -1641,6 +1915,9 @@ class TestPromptBoundaries:
         assert "技术教程、最简可运行代码" in prompts.INFO_GAP_SYSTEM
         assert "为什么不用 CCC" in prompts.INFO_GAP_SYSTEM
         assert "小白/萌新/刚上手" in prompts.INFO_GAP_SYSTEM
+        assert "主动检索不等于多轮深检索" in prompts.INFO_GAP_SYSTEM
+        assert "有没有比较靠谱的资料可以看" in prompts.INFO_GAP_SYSTEM
+        assert "不要串到旧上下文" in prompts.INFO_GAP_SYSTEM
 
     def test_retriever_planner_prompt_prefers_unified_search(self):
         from nervos_brain.graph_engine import prompts
@@ -1654,6 +1931,9 @@ class TestPromptBoundaries:
         assert "TS/JS CKB transfer CCC" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不要写“请检索/需要检索/帮助用户理解”这种指令腔" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "评价、判断或分析某个真实对象" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "必须默认只生成 1 个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不要把历史错误回答、用户纠错语气、内部评测描述或整段对话塞进 query" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "普通概念、学习路线、资料推荐不要生成 regex" in prompts.RETRIEVER_PLANNER_SYSTEM
 
     def test_reflection_prompt_avoids_vague_extra_loops(self):
         from nervos_brain.graph_engine import prompts
@@ -1674,17 +1954,20 @@ class TestPromptBoundaries:
         assert "Go SDK" in prompts.REFLECTION_SYSTEM
         assert "全部写成未实现 TODO" in prompts.REFLECTION_SYSTEM
         assert "你发明了不能用的方法" in prompts.REFLECTION_SYSTEM
+        assert "想要更完整或想要更多来源" in prompts.REFLECTION_SYSTEM
+        assert "答案方向正确但不够完美" in prompts.REFLECTION_SYSTEM
+        assert "不要触发第二次 answer_composer" in prompts.REFLECTION_SYSTEM
 
     def test_model_router_prompt_uses_mini_high_medium_and_high(self):
         from nervos_brain.graph_engine import full_nodes
 
-        assert "不要过度省模型" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "不要过度省模型，也不要过度升档" in full_nodes._LLM_ROUTER_SYSTEM
         assert "low、mini_high、medium、high 四档之一" in full_nodes._LLM_ROUTER_SYSTEM
         assert "低成本深思考档" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "技术类 graph 节点应至少选择 mini_high" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "不要默认升 medium/high" in full_nodes._LLM_ROUTER_SYSTEM
         assert "草稿是否把 A 项目证据泛化到 B 项目" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "应优先选择 high" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "已超过目标耗时" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "普通资料推荐、学习路线、覆盖情况说明应避免 high" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "主动选择更快档位" in full_nodes._LLM_ROUTER_SYSTEM
         assert full_nodes._MODEL_TIERS == {"low", "mini_high", "medium", "high"}
         assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "mini_high"
         assert full_nodes._NODE_FALLBACK_TIERS["retriever_planner"] == "mini_high"
@@ -1704,6 +1987,10 @@ class TestPromptBoundaries:
         assert "Go-only evidence" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "每条包含名称、它是什么、为什么相关、链接/引用" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "Talk/forum" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "默认回答要短、贴题、先给可执行主线" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "资料推荐 / 靠谱资料 / 从哪里开始" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不要把答案扩写成完整大教程" in prompts.ANSWER_COMPOSER_SYSTEM
 
     def test_direct_answer_prompt_defers_project_and_source_requests_to_retrieval(self):
         from nervos_brain.graph_engine import prompts

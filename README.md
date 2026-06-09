@@ -49,6 +49,7 @@ mamba run -n nervos-brain python scripts/run_discord_bot.py
 ## 文档入口
 
 - [工程文档索引](docs/README.md)
+- [交付说明](docs/handover.md)
 - [新服务器部署](docs/deployment.md)
 - [配置说明](docs/configuration.md)
 - [检索数据与 Qdrant 重建](docs/retrieval-data.md)
@@ -116,3 +117,5 @@ mamba run -n nervos-brain python -m py_compile \
 ```
 
 更多测试和验收命令见 [docs/testing-and-acceptance.md](docs/testing-and-acceptance.md)。
+
+交付接手清单见 [docs/handover.md](docs/handover.md)。

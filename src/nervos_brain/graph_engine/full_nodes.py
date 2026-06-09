@@ -74,14 +74,15 @@ _LLM_ROUTER_SYSTEM = """你是 Nervos Brain 的模型档位路由器。
 - high: 深推理档。用于源码/架构/协议实现问题、复杂代码生成、跨仓库/多后端证据综合、引用一致性高风险、证据与草稿明显不一致、排障/错误日志、安全/资金/私钥相关决策。
 
 选择约束：
-- 不要过度省模型。除非任务明显低风险且局部，技术类 graph 节点应至少选择 mini_high，而不是 low。
-- info_gap_assessor / retriever_planner 遇到真实项目、API、仓库、版本、检索策略、多库选择、是否需要证据的问题，通常选 mini_high；涉及源码实现、架构或强冲突时升级到 medium/high。
-- reflection_pre 存在证据、引用、草稿、冲突或跨来源判断时，通常至少选 mini_high；reflection_post 直接影响最终质量，通常至少选 medium。
-- 如果反思节点要判断“证据是否真能支撑回答”“引用是否错配”“草稿是否把 A 项目证据泛化到 B 项目”“是否需要改写”，应优先选择 high。
-- answer_composer 遇到源码实现、架构解释、协议/钱包/资金流程、跨多证据综合、长答案或代码示例时，应优先选择 high。
+- 不要过度省模型，也不要过度升档。模型档位应服务于“本节点需要做多少判断”，而不是因为主题是技术类就自动升高。
+- 简单追问、资料入口推荐、已有证据充足后的判断、低风险格式/JSON 分类，优先 low 或 mini_high；不要默认升 medium/high。
+- info_gap_assessor / retriever_planner 遇到真实项目、API、仓库、版本、检索策略、多库选择、是否需要证据的问题，通常选 mini_high；只有跨来源冲突、复杂源码/架构、安全/资金风险时才升级到 medium/high。
+- reflection_pre 若已有证据足够覆盖核心问题，通常选 mini_high 并推动 accept_answer；不要为了“更完整”选择高档位继续多轮反思。
+- reflection_post 直接影响最终质量，通常选 medium；只有明显引用错配、草稿是否把 A 项目证据泛化到 B 项目、无证据硬编或严重偏题时才选 high。
+- answer_composer 的默认档位是 medium；只有复杂代码生成、源码/协议深推理、跨多证据综合或安全/资金敏感方案才选 high。普通资料推荐、学习路线、覆盖情况说明应避免 high。
 - direct_answer 只有在闲聊、帮助说明、简单概念解释时选 low；如果用户要求真实项目细节、具体实现、代码、API 或高风险建议，至少 mini_high。
-- 如果 time_budget 已超过目标耗时，但当前节点是最终回答或反思校验，不要为了省时降到 low；优先用 medium 快速给出稳妥结论，只有低风险局部任务才选 low。
-- high 可以更积极使用，但不要用于纯格式修复、短闲聊、已明确无需推理的简单节点。
+- 如果 time_budget 已接近或超过目标耗时，应主动选择更快档位，优先给基于已有信息的简洁结论；不要继续高推理换取边际质量。
+- high 可以使用，但它是例外档，不是技术问题默认档；不要用于纯格式修复、短闲聊、资料列表、已有证据充分的简单综合。
 
 必须只输出 JSON：
 {"tier":"low|mini_high|medium|high","reasoning":"一句话说明","confidence":0.0}
@@ -300,6 +301,7 @@ def _llm_meta_row(
         "model": str(meta.get("model") or (profile or {}).get("model") or ""),
         "tier": str((profile or {}).get("tier", "")),
         "reasoning_effort": str(meta.get("reasoning_effort") or (profile or {}).get("reasoning_effort") or ""),
+        "service_tier": str(meta.get("service_tier") or state.get("_llm_service_tier") or ""),
         "json_mode": bool(meta.get("json_mode", call_kind.endswith("_json"))),
         "max_tokens": _int_like(meta.get("max_tokens", (profile or {}).get("max_tokens", 0))),
         "elapsed_ms": _int_like(meta.get("elapsed_ms", 0)),
@@ -376,6 +378,9 @@ def _tool_args_for_step(
 
     if tool == "qdrant_search":
         args: dict[str, Any] = {"query": query, "filters": filters, "top_k": top_k}
+        regex_queries = step.get("regex_queries")
+        if isinstance(regex_queries, list):
+            args["regex_queries"] = regex_queries
         if retriever is not None:
             args["_multi_retriever"] = retriever
         if state.get("_qdrant_store") is not None:
@@ -507,6 +512,16 @@ def _execute_retrieval_tool_call(
     if isinstance(result.get("error"), dict):
         trace_row["error_code"] = str(result["error"].get("code", ""))
         trace_row["error_message"] = str(result["error"].get("message", ""))
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+    if isinstance(data, dict):
+        for key in (
+            "regex_queries_count",
+            "regex_valid_count",
+            "regex_dropped_count",
+            "regex_dropped_reasons",
+        ):
+            if key in data:
+                trace_row[key] = data[key]
     return result, trace_row, True
 
 
@@ -571,6 +586,8 @@ def _profile_kwargs(profile: dict[str, Any]) -> dict[str, Any]:
         kwargs["verbosity"] = str(profile["verbosity"])
     if _int_like(profile.get("max_tokens", 0)) > 0:
         kwargs["max_tokens"] = _int_like(profile.get("max_tokens", 0))
+    if profile.get("service_tier"):
+        kwargs["service_tier"] = str(profile["service_tier"])
     return kwargs
 
 
@@ -629,7 +646,7 @@ def _get_profile(
     if hasattr(registry, "get_profile_for"):
         try:
             max_cost = str(state.get("_provider_max_cost", "high"))
-            return _coerce_profile(
+            profile = _coerce_profile(
                 registry.get_profile_for(  # type: ignore[attr-defined]
                     task_type,
                     tier=tier,
@@ -638,16 +655,22 @@ def _get_profile(
                 ),
                 fallback_tier=tier,
             )
+            if state.get("_llm_service_tier"):
+                profile["service_tier"] = str(state.get("_llm_service_tier"))
+            return profile
         except Exception:
             pass
     model = _select_model(state, task_type, require_json=require_json)
-    return {
+    profile = {
         "tier": tier,
         "model": model or "",
         "reasoning_effort": "",
         "verbosity": "",
         "max_tokens": 0,
     }
+    if state.get("_llm_service_tier"):
+        profile["service_tier"] = str(state.get("_llm_service_tier"))
+    return profile
 
 
 def _router_context_flags(state: dict, *, node_name: str) -> dict[str, Any]:
@@ -830,8 +853,58 @@ def _format_conversation_context(messages: list[dict[str, Any]], *, limit_chars:
     return text
 
 
+def _looks_like_self_contained_question(question: str) -> bool:
+    """Best-effort context gate; semantic decisions still belong to the LLM."""
+    text = re.sub(r"\s+", " ", str(question or "")).strip()
+    if len(text) < 12:
+        return False
+    if not any(marker in text for marker in ("?", "？", "什么", "哪些", "哪个", "如何", "怎么", "为什么", "是否", "吗")):
+        return False
+    followup_markers = (
+        "这个",
+        "这个呢",
+        "这些",
+        "它",
+        "他们",
+        "上面",
+        "刚才",
+        "继续",
+        "再说",
+        "小白版",
+        "展开",
+        "那",
+        "所以",
+    )
+    if any(text == marker or text.startswith(marker) for marker in followup_markers):
+        return False
+    context_dependent_patterns = (
+        "有没有",
+        "有链接",
+        "哪里看",
+        "怎么学",
+        "靠谱吗",
+        "资料",
+        "来源",
+        "引用",
+    )
+    if any(pattern in text for pattern in context_dependent_patterns) and not re.search(
+        r"[A-Za-z0-9][A-Za-z0-9_.:/#-]{2,}",
+        text,
+    ):
+        return False
+    return True
+
+
 def _conversation_context_from_state(state: dict) -> str:
     existing = str(state.get("conversation_context", "") or "").strip()
+    question = _question_from_user_message(state)
+    if existing and existing.startswith("当前消息正在回复"):
+        return existing
+    if _looks_like_self_contained_question(question):
+        return (
+            "上下文门控: 当前用户问题看起来是完整独立问题。"
+            "普通最近历史只可用于代词/省略消解，不得改变检索目标、回答主题或证据组织。"
+        )
     if existing:
         return existing
     return _format_conversation_context(_load_recent_messages(state))
@@ -1119,6 +1192,7 @@ def _call_llm_with_retry(
     model: str | None,
     reasoning_effort: str | None = None,
     verbosity: str | None = None,
+    service_tier: str | None = None,
     max_tokens: int | None = None,
     max_attempts: int = 2,
     image_paths: list[str] | None = None,
@@ -1133,6 +1207,7 @@ def _call_llm_with_retry(
                 model=model,
                 reasoning_effort=reasoning_effort,
                 verbosity=verbosity,
+                service_tier=service_tier,
                 max_tokens=max_tokens,
                 image_paths=image_paths,
             )
@@ -1178,7 +1253,7 @@ def info_gap_assessor(state: dict) -> dict:
         checkpoint = None
     question = _merge_checkpoint_question(raw_question, checkpoint)
     recent_messages = _load_recent_messages(state)
-    conversation_context = _format_conversation_context(recent_messages)
+    conversation_context = _conversation_context_from_state(state)
 
 
     user_prompt = prompts.INFO_GAP_USER.format(
@@ -1390,6 +1465,9 @@ def retriever_planner(state: dict) -> dict:
             "filters": filters,
             "top_k": step_top_k,
         }
+        regex_queries = _normalize_regex_queries_for_step(raw_step.get("regex_queries"))
+        if tool == "qdrant_search" and regex_queries:
+            step["regex_queries"] = regex_queries
         if filter_notes:
             step["filter_notes"] = filter_notes
         time_range = str(raw_step.get("time_range", "") or "").strip()
@@ -1434,6 +1512,35 @@ def retriever_planner(state: dict) -> dict:
         },
         **llm_trace_update,
     }
+
+
+def _normalize_regex_queries_for_step(raw_queries: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_queries, list):
+        return []
+    allowed_fields = {"title", "keywords", "anchor", "url", "summary", "raw_text"}
+    normalized: list[dict[str, Any]] = []
+    for raw_query in raw_queries[:3]:
+        if not isinstance(raw_query, dict):
+            continue
+        pattern = str(raw_query.get("pattern", "") or "").strip()
+        if not pattern:
+            continue
+        label = str(raw_query.get("label", "") or "").strip()[:80]
+        reason = str(raw_query.get("reason", "") or "").strip()[:160]
+        raw_fields = raw_query.get("fields", [])
+        fields: list[str] = []
+        if isinstance(raw_fields, list):
+            for raw_field in raw_fields:
+                field = str(raw_field or "").strip()
+                if field in allowed_fields and field not in fields:
+                    fields.append(field)
+        entry: dict[str, Any] = {"label": label, "pattern": pattern[:160]}
+        if fields:
+            entry["fields"] = fields
+        if reason:
+            entry["reason"] = reason
+        normalized.append(entry)
+    return normalized
 
 
 # ---------------------------------------------------------------------------

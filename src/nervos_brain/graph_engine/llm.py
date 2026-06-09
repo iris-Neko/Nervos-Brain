@@ -85,6 +85,24 @@ def get_api_base() -> str | None:
     return val or None
 
 
+def _service_tier_value(value: Any) -> str:
+    tier = str(value or "").strip().lower()
+    return tier if tier in {"auto", "default", "flex", "priority"} else ""
+
+
+def get_service_tier() -> str:
+    env_tier = _service_tier_value(os.environ.get("LLM_SERVICE_TIER"))
+    if env_tier:
+        return env_tier
+
+    cfg = _load_config()
+    cfg_tier = _service_tier_value(cfg.get("service_tier"))
+    if cfg_tier:
+        return cfg_tier
+
+    return ""
+
+
 def call_llm(
     system_prompt: str,
     user_prompt: str,
@@ -95,6 +113,7 @@ def call_llm(
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
     verbosity: str | None = None,
+    service_tier: str | None = None,
     disable_response_storage: bool | None = None,
     image_paths: list[str] | None = None,
 ) -> str:
@@ -120,6 +139,13 @@ def call_llm(
         if verbosity is not None
         else str(cfg.get("verbosity", "")).strip()
     )
+    request_service_tier = (
+        _service_tier_value(service_tier)
+        if service_tier is not None
+        else get_service_tier()
+    )
+    if service_tier is not None and not request_service_tier and str(service_tier or "").strip():
+        _logger.warning("Ignoring unsupported LLM service_tier=%s", service_tier)
     if disable_response_storage is None:
         disable_store = bool(cfg.get("disable_response_storage", False))
     else:
@@ -140,6 +166,7 @@ def call_llm(
                     json_mode=json_mode,
                     reasoning_effort=effort,
                     verbosity=text_verbosity,
+                    service_tier=request_service_tier,
                     disable_store=disable_store,
                     image_paths=image_paths,
                 ),
@@ -172,6 +199,8 @@ def call_llm(
             kwargs["reasoning_effort"] = effort
         if text_verbosity:
             kwargs["verbosity"] = text_verbosity
+        if request_service_tier:
+            kwargs["service_tier"] = request_service_tier
         if disable_store:
             kwargs["store"] = False
 
@@ -189,6 +218,7 @@ def call_llm(
             "json_mode": bool(json_mode),
             "reasoning_effort": effort,
             "verbosity": text_verbosity,
+            "service_tier": request_service_tier,
             "max_tokens": tokens,
             "elapsed_ms": elapsed_ms,
             "usage": usage,
@@ -212,6 +242,7 @@ def _legacy_call_llm(
     tokens: int,
     effort: str,
     text_verbosity: str,
+    service_tier: str = "",
     disable_store: bool,
     max_retries: int,
 ) -> str:
@@ -228,6 +259,7 @@ def _legacy_call_llm(
                 json_mode=json_mode,
                 reasoning_effort=effort,
                 verbosity=text_verbosity,
+                service_tier=service_tier,
                 disable_store=disable_store,
             ),
             max_attempts=max_retries,
@@ -259,6 +291,8 @@ def _legacy_call_llm(
         kwargs["reasoning_effort"] = effort
     if text_verbosity:
         kwargs["verbosity"] = text_verbosity
+    if service_tier:
+        kwargs["service_tier"] = service_tier
     if disable_store:
         kwargs["store"] = False
 
@@ -279,6 +313,7 @@ def _call_llm_via_responses(
     json_mode: bool,
     reasoning_effort: str,
     verbosity: str,
+    service_tier: str,
     disable_store: bool,
     image_paths: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
@@ -309,6 +344,9 @@ def _call_llm_via_responses(
         text_cfg["verbosity"] = verbosity
     if text_cfg:
         kwargs["text"] = text_cfg
+
+    if service_tier:
+        kwargs["service_tier"] = service_tier
 
     if disable_store:
         kwargs["store"] = False
@@ -540,6 +578,7 @@ def call_llm_json(
     model: str | None = None,
     reasoning_effort: str | None = None,
     verbosity: str | None = None,
+    service_tier: str | None = None,
     max_tokens: int | None = None,
     image_paths: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -559,6 +598,7 @@ def call_llm_json(
         model=model,
         reasoning_effort=reasoning_effort,
         verbosity=verbosity,
+        service_tier=service_tier,
         max_tokens=max_tokens,
         image_paths=image_paths,
     )
@@ -576,6 +616,7 @@ def call_llm_json(
             model=model,
             reasoning_effort=reasoning_effort,
             verbosity=verbosity,
+            service_tier=service_tier,
             max_tokens=max_tokens,
             image_paths=image_paths,
         )

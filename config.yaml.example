@@ -30,6 +30,9 @@ llm:
   # 是否禁用响应存储（store=false）
   disable_response_storage: true
 
+  # 默认 API 服务档位。通常保持为空；用户发送 /fast 后只会让下一次请求临时使用 priority。
+  service_tier: ""
+
 llm_profiles:
   # 动态 graph 路由使用的模型档位。router 只负责选档，不直接回答用户。
   router:
@@ -84,6 +87,18 @@ logging:
 
   # 是否写入文件
   file: true
+
+progress_updates:
+  # Bot 长时间处理时，向用户发送轻量可见进度提示。
+  # 这只影响 Telegram/Discord 用户体验，不改变 graph 检索或回答逻辑。
+  enabled: true
+  first_after_s: 30
+  interval_s: 45
+  max_updates: 3
+  messages:
+    - "我还在查资料和整理证据，稍等一下。"
+    - "资料比较多，我正在核对来源和组织回答。"
+    - "还在生成最终回答，请再等一下。"
 
 retrieval:
   # Qdrant server URL。为空时回退到本地 qdrant_path 嵌入模式。

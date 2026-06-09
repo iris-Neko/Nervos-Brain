@@ -13,8 +13,9 @@ RetrievalConfig, so you can turn off any path without touching the code.
 """
 from __future__ import annotations
 
+import re
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from nervos_brain.core_protocols import Evidence
 
@@ -27,6 +28,22 @@ from .fuzzy_search import fuzzy_search
 from .qdrant_writer import QdrantStore
 from .rank_fusion import FusedResult, reciprocal_rank_fusion
 from .search import _build_filter_must
+
+
+_REGEX_FIELDS = {"title", "keywords", "anchor", "url", "summary", "raw_text"}
+_DEFAULT_REGEX_FIELDS = ("title", "keywords", "anchor", "url", "summary")
+_REGEX_MAX_QUERIES = 3
+_REGEX_MAX_PATTERN_CHARS = 160
+_REGEX_RAW_TEXT_CHARS = 4000
+_REGEX_DANGEROUS_PATTERNS = (
+    r"\.\*",
+    r"\.\+",
+    r"\(\?[:=!<P]",
+    r"\\[1-9]",
+    r"\(\.\*\)",
+    r"\(\.\+\)",
+    r"\{[0-9,]{3,}\}",
+)
 
 
 def _is_broad_resource_query(query: str) -> bool:
@@ -50,6 +67,72 @@ def _is_broad_resource_query(query: str) -> bool:
         "getting started",
     )
     return any(marker in text or marker in compact for marker in markers)
+
+
+def _normalize_regex_queries(raw_queries: Any) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    if not isinstance(raw_queries, list):
+        return [], []
+
+    normalized: list[dict[str, Any]] = []
+    dropped: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for raw_query in raw_queries[:_REGEX_MAX_QUERIES]:
+        if not isinstance(raw_query, dict):
+            dropped.append({"reason": "regex_query_not_object"})
+            continue
+        label = str(raw_query.get("label", "") or "").strip()[:80]
+        pattern = str(raw_query.get("pattern", "") or "").strip()
+        if not pattern:
+            dropped.append({"label": label, "reason": "regex_empty"})
+            continue
+        if len(pattern) > _REGEX_MAX_PATTERN_CHARS:
+            dropped.append({"label": label, "reason": "regex_too_long"})
+            continue
+        if pattern in seen:
+            dropped.append({"label": label, "reason": "regex_duplicate"})
+            continue
+        if _looks_dangerous_regex(pattern):
+            dropped.append({"label": label, "reason": "regex_too_broad"})
+            continue
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            dropped.append({"label": label, "reason": "regex_compile_error"})
+            continue
+
+        raw_fields = raw_query.get("fields", _DEFAULT_REGEX_FIELDS)
+        fields: list[str] = []
+        if isinstance(raw_fields, list):
+            for raw_field in raw_fields:
+                field = str(raw_field or "").strip()
+                if field in _REGEX_FIELDS and field not in fields:
+                    fields.append(field)
+        if not fields:
+            fields = list(_DEFAULT_REGEX_FIELDS)
+
+        seen.add(pattern)
+        normalized.append(
+            {
+                "label": label,
+                "pattern": pattern,
+                "fields": fields,
+                "reason": str(raw_query.get("reason", "") or "").strip()[:160],
+                "_compiled": compiled,
+            }
+        )
+
+    return normalized, dropped
+
+
+def _looks_dangerous_regex(pattern: str) -> bool:
+    stripped = pattern.strip()
+    if stripped in {".*", ".+", "(?i).*", "(?i).+"}:
+        return True
+    for marker in _REGEX_DANGEROUS_PATTERNS:
+        if re.search(marker, stripped):
+            return True
+    return False
 
 
 class MultiRetriever:
@@ -76,6 +159,11 @@ class MultiRetriever:
         )
         self._archive = archive_store or ArchiveStore(config=self._cfg)
         self._bm25 = BM25Index()
+        self._last_regex_summary: dict[str, Any] = {
+            "regex_queries_count": 0,
+            "regex_valid_count": 0,
+            "regex_dropped_count": 0,
+        }
 
     # ── index management ───────────────────────────────────────────────────
 
@@ -91,6 +179,7 @@ class MultiRetriever:
         query: str,
         filters: Optional[Dict[str, str]] = None,
         top_k: Optional[int] = None,
+        regex_queries: Optional[list[dict[str, Any]]] = None,
     ) -> List[Evidence]:
         """Run all enabled retrieval paths, fuse, and return Evidence.
 
@@ -107,6 +196,17 @@ class MultiRetriever:
 
         ranked_lists: List[List[dict]] = []
         path_names: List[str] = []
+        normalized_regex, dropped_regex = _normalize_regex_queries(regex_queries)
+        regex_meta: dict[str, Any] = {
+            "regex_queries_count": len(regex_queries or []),
+            "regex_valid_count": len(normalized_regex),
+            "regex_dropped_count": len(dropped_regex),
+        }
+        if dropped_regex:
+            regex_meta["regex_dropped_reasons"] = ",".join(
+                sorted({row.get("reason", "") for row in dropped_regex if row.get("reason")})
+            )
+        self._last_regex_summary = regex_meta
 
         # ── 1. Vector search ───────────────────────────────────────────────
         # Broad official-doc queries should still hit the fast Qdrant path.
@@ -139,6 +239,11 @@ class MultiRetriever:
             if exact_results:
                 ranked_lists.append(exact_results)
                 path_names.append("exact")
+        if cfg.enable_exact and normalized_regex:
+            regex_results = self._regex_exact_search(normalized_regex, per_path_k, filters)
+            if regex_results:
+                ranked_lists.append(regex_results)
+                path_names.append("regex_exact")
 
         if not ranked_lists:
             return []
@@ -149,7 +254,16 @@ class MultiRetriever:
         )[:final_top_k]
 
         # ── 6. Hydrate Evidence with archive raw_text ──────────────────────
-        return [self._to_evidence(r) for r in fused]
+        evidence = [self._to_evidence(r) for r in fused]
+        for row in evidence:
+            payload = row.get("payload")
+            if isinstance(payload, dict):
+                payload.update(regex_meta)
+        return evidence
+
+    @property
+    def last_regex_summary(self) -> dict[str, Any]:
+        return dict(self._last_regex_summary)
 
     # ── private path implementations ───────────────────────────────────────
 
@@ -253,6 +367,75 @@ class MultiRetriever:
             }
             for h in hits
         ]
+
+    def _regex_exact_search(
+        self,
+        regex_queries: list[dict[str, Any]],
+        top_k: int,
+        filters: Optional[Dict[str, str]] = None,
+    ) -> List[dict]:
+        if not regex_queries:
+            return []
+
+        weights = {
+            "title": 10.0,
+            "keywords": 8.0,
+            "anchor": 7.0,
+            "url": 6.0,
+            "summary": 4.0,
+            "raw_text": 1.5,
+        }
+        best: dict[str, dict] = {}
+        for record in self._archive.list_all():
+            if not self._record_matches_filters(record, filters or {}):
+                continue
+            for idx, query in enumerate(regex_queries, start=1):
+                compiled = query.get("_compiled")
+                if compiled is None:
+                    continue
+                score = 0.0
+                matched_fields: list[str] = []
+                for field in query.get("fields", _DEFAULT_REGEX_FIELDS):
+                    text = self._regex_field_text(record, str(field))
+                    if text and compiled.search(text):
+                        score += weights.get(str(field), 1.0)
+                        matched_fields.append(str(field))
+                if score <= 0.0:
+                    continue
+                score += max(0.0, 0.1 - (idx * 0.01))
+                existing = best.get(record.anchor)
+                if existing is None or score > float(existing.get("score", 0.0)):
+                    best[record.anchor] = {
+                        "anchor": record.anchor,
+                        "title": record.title,
+                        "source": record.source,
+                        "score": score,
+                        "payload": {
+                            "regex_label": query.get("label", ""),
+                            "regex_pattern": query.get("pattern", ""),
+                            "regex_fields": ",".join(matched_fields),
+                        },
+                    }
+
+        results = list(best.values())
+        results.sort(key=lambda row: float(row.get("score", 0.0)), reverse=True)
+        return results[:top_k]
+
+    @staticmethod
+    def _regex_field_text(record: ArchiveRecord, field: str) -> str:
+        if field == "title":
+            return record.title or ""
+        if field == "keywords":
+            return record.keywords or ""
+        if field == "anchor":
+            return record.anchor or ""
+        if field == "url":
+            return record.url or ""
+        if field == "summary":
+            return record.summary or ""
+        if field == "raw_text":
+            return (record.raw_text or "")[:_REGEX_RAW_TEXT_CHARS]
+        return ""
 
     def _exact_search(
         self, query: str, top_k: int, filters: Optional[Dict[str, str]] = None

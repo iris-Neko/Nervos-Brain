@@ -146,3 +146,5 @@ mamba run -n nervos-brain python -m py_compile \
 ```
 
 更多验收项目见 [测试与验收](testing-and-acceptance.md)。
+
+交付接手清单和能力边界见 [交付说明](handover.md)。

@@ -232,3 +232,46 @@ mamba run -n nervos-brain python scripts/run_github_code_ingest.py --incremental
 ```
 
 注意：`data/ingest_state/` 是本机运行游标，不提交；`data/manifests/` 是公开数据版本说明，可以在确认无私密信息后提交。
+
+## Bot 一直显示 typing 但不出消息
+
+现象：Telegram 或 Discord 中看到 Bot 一直处于 typing 状态，迟迟没有最终回答。
+
+常见原因：
+
+```text
+LLM provider 响应很慢或网络超时
+复杂问题触发多轮检索、反思和重写，耗时超过预期
+Qdrant 或 GitHub/Talk 外部请求阻塞
+Bot 进程仍在处理前一个长请求，后续请求排队
+```
+
+检查：
+
+```bash
+tail -n 100 data/logs/telegram_bot_polling.stderr.log
+tail -n 20 data/telegram_bot/debug_events.jsonl
+ps -eo pid,args | grep run_telegram_bot_polling.py | grep -v grep
+curl http://127.0.0.1:6333/collections
+```
+
+处理：
+
+```text
+先等当前请求完成，复杂请求可能较慢。
+如果日志显示 LLM 或网络超时，重试同一问题。
+如果进程卡死或长期无新日志，可以重启 Telegram Bot。
+如果频繁发生，检查 config 中 target_elapsed_ms / max_elapsed_ms、模型路由和网络质量。
+```
+
+重启 Telegram：
+
+```bash
+bash restart_telegram_bot.sh
+```
+
+Discord 目前通常以前台方式运行；如果卡住，停止当前进程后重新执行：
+
+```bash
+mamba run -n nervos-brain python scripts/run_discord_bot.py
+```
