@@ -1770,9 +1770,13 @@ def _has_reference_section(text: str) -> bool:
     )
 
 
-def _append_reference_section(text: str, citations: list[dict[str, Any]]) -> str:
+def _append_reference_section(text: str, citations: list[dict[str, Any]], *, locale: str = "zh-CN") -> str:
     if not citations or _has_reference_section(text):
         return text.strip()
+
+    is_english = str(locale or "").strip().lower().replace("_", "-").startswith("en")
+    heading = "References" if is_english else "参考来源"
+    fallback_title = "Source" if is_english else "来源"
 
     rows: list[str] = []
     for idx, citation in enumerate(citations, start=1):
@@ -1783,7 +1787,7 @@ def _append_reference_section(text: str, citations: list[dict[str, Any]]) -> str
         url = str(citation.get("url") or "").strip()
         anchor = str(citation.get("anchor") or "").strip()
         if not title:
-            title = url or anchor or "来源"
+            title = url or anchor or fallback_title
         if url:
             rows.append(f"{label} **{title}**\n{url}")
         else:
@@ -1791,7 +1795,7 @@ def _append_reference_section(text: str, citations: list[dict[str, Any]]) -> str
 
     if not rows:
         return text.strip()
-    return text.strip() + "\n\n## 参考来源\n\n" + "\n\n".join(rows)
+    return text.strip() + f"\n\n## {heading}\n\n" + "\n\n".join(rows)
 
 
 def _required_questions(info_needs: list[dict]) -> list[str]:
@@ -2448,25 +2452,12 @@ def format_repair(state: dict) -> dict:
         response.setdefault("text", "")
         response.setdefault("citations", [])
 
-    # 后回答反思超过轮次上限时，附加不确定性提示，避免“静默通过”。
-    max_post_rounds = _budget_int(state, "max_reflection_rounds_post", 2)
-    post_rounds = _int_like(state.get("_reflection_rounds_post", 0))
-    reflection_decision = str(state.get("reflection_decision", ""))
-    if (
-        post_rounds >= max_post_rounds
-        and reflection_decision in {"revise_answer", "continue_retrieval"}
-    ):
-        note = "\n\n注：当前回答存在不确定性，建议补充更多上下文后再确认。"
-        text_now = str(response.get("text", "") or "")
-        if note.strip() not in text_now:
-            response["text"] = text_now + note
-
     text = response.get("text", "")
     citations = response.get("citations", [])
 
     text = sanitize_markdown(text)
     text, citations = normalize_citations(text, citations)
-    text = _append_reference_section(text, citations)
+    text = _append_reference_section(text, citations, locale=str(state.get("locale", "zh-CN")))
 
     response["text"] = text
     response["citations"] = citations

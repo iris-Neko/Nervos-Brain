@@ -99,6 +99,12 @@ progress_updates:
     - "我还在查资料和整理证据，稍等一下。"
     - "资料比较多，我正在核对来源和组织回答。"
     - "还在生成最终回答，请再等一下。"
+  # 可选：按语言覆盖进度提示；不配置时英文问题会使用内置英文默认文案。
+  messages_by_locale:
+    en:
+      - "I am still checking sources and organizing the evidence. Please wait a moment."
+      - "There is quite a bit of material, so I am verifying the sources and shaping the answer."
+      - "I am still preparing the final answer. Please wait a little longer."
 
 retrieval:
   # Qdrant server URL。为空时回退到本地 qdrant_path 嵌入模式。

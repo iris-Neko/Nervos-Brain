@@ -28,6 +28,40 @@ def test_update_to_envelope_basic_text():
     assert env["locale_hint"] == "en"
 
 
+def test_update_to_envelope_prefers_english_text_over_chinese_account_locale():
+    update = {
+        "update_id": 10011,
+        "message": {
+            "message_id": 99,
+            "date": 1711111111,
+            "text": "@NBCKB_Bot What is CKB, I am a rookie",
+            "chat": {"id": -10088, "type": "supergroup"},
+            "from": {"id": 42, "language_code": "zh-hans"},
+        },
+    }
+    env = telegram_update_to_message_envelope(update)
+
+    assert env["content"] == "What is CKB, I am a rookie"
+    assert env["locale_hint"] == "en"
+
+
+def test_update_to_envelope_prefers_chinese_text_over_english_account_locale():
+    update = {
+        "update_id": 10012,
+        "message": {
+            "message_id": 99,
+            "date": 1711111111,
+            "text": "@NBCKB_Bot CKB 是什么？我是新手",
+            "chat": {"id": -10088, "type": "supergroup"},
+            "from": {"id": 42, "language_code": "en"},
+        },
+    }
+    env = telegram_update_to_message_envelope(update)
+
+    assert env["content"] == "CKB 是什么？我是新手"
+    assert env["locale_hint"] == "zh-CN"
+
+
 def test_update_to_envelope_strips_bot_mention_from_group_message():
     update = {
         "update_id": 1001,

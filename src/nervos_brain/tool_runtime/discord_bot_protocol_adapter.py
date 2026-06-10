@@ -8,6 +8,8 @@ from typing import Any
 
 from nervos_brain.core_protocols.message_protocols import MessageEnvelope, OutboundMessage
 
+from .language_detection import detect_message_locale
+
 
 def discord_message_to_message_envelope(
     message: dict[str, Any],
@@ -70,7 +72,11 @@ def discord_message_to_message_envelope(
             envelope["command_args"] = command_args
 
     locale = author.get("locale")
-    envelope["locale_hint"] = str(locale).strip() if isinstance(locale, str) and locale.strip() else default_locale
+    fallback_locale = str(locale).strip() if isinstance(locale, str) and locale.strip() else default_locale
+    envelope["locale_hint"] = detect_message_locale(
+        command_args if command_args is not None else content,
+        fallback_locale=fallback_locale,
+    )
     return envelope
 
 
@@ -242,4 +248,3 @@ def _extract_attachments(message: dict[str, Any]) -> list[dict[str, str]]:
                 out.append({"kind": "link", "url": url, "name": str(embed.get("title") or "embed")})
 
     return out
-

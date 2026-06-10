@@ -25,6 +25,7 @@ from .discord_bot_protocol_adapter import (
 )
 from .fast_mode import FastModeStateStore, fast_status_message, parse_fast_command
 from .feedback import FeedbackJsonlStore, parse_csat_callback_data
+from .language_detection import detect_message_locale
 from .progress import ProgressUpdateConfig
 
 logger = logging.getLogger(__name__)
@@ -619,10 +620,12 @@ class DiscordBotRuntime:
             lock = self._channel_locks.setdefault(channel_id, asyncio.Lock())
             progress_task: asyncio.Task | None = None
             async with lock:
+                progress_locale = _detect_discord_progress_locale(payload, str(client.user.id))
                 progress_task = asyncio.create_task(
                     _send_discord_progress_updates(
                         message=message,
                         config=self._progress_update_config,
+                        locale=progress_locale,
                     )
                 )
                 try:
@@ -664,13 +667,13 @@ async def _run_gateway_in_executor(*, gateway: DiscordGateway, payload: dict[str
     return await loop.run_in_executor(executor, lambda: gateway.process_message_payload(payload, bot_user_id=bot_user_id))
 
 
-async def _send_discord_progress_updates(*, message: Any, config: ProgressUpdateConfig) -> None:
+async def _send_discord_progress_updates(*, message: Any, config: ProgressUpdateConfig, locale: str = "zh-CN") -> None:
     if not config.should_run:
         return
     try:
         await asyncio.sleep(config.first_after_s)
         for idx in range(config.max_updates):
-            await _send_discord_progress_message(message=message, text=config.message_for(idx))
+            await _send_discord_progress_message(message=message, text=config.message_for(idx, locale=locale))
             if idx >= config.max_updates - 1:
                 return
             await asyncio.sleep(config.interval_s)
@@ -716,6 +719,23 @@ def _is_bot_mentioned(content: str, bot_user_id: str, payload: dict[str, Any]) -
 def _strip_bot_mention(content: str, bot_user_id: str) -> str:
     cleaned = re.sub(rf"<@!?{re.escape(bot_user_id)}>", "", content)
     return cleaned.strip()
+
+
+def _detect_discord_progress_locale(payload: dict[str, Any], bot_user_id: str) -> str:
+    author = payload.get("author")
+    if not isinstance(author, dict):
+        author = {}
+    locale = author.get("locale")
+    fallback_locale = str(locale).strip() if isinstance(locale, str) and locale.strip() else "zh-CN"
+    content = str(payload.get("content", "") or "")
+    if bot_user_id:
+        content = _strip_bot_mention(content, bot_user_id)
+    if _is_feedback_command_text(content) or _is_fast_command_text(content):
+        return fallback_locale
+    if content.strip().startswith("/"):
+        parts = content.strip().split(maxsplit=1)
+        content = parts[1] if len(parts) > 1 else ""
+    return detect_message_locale(content, fallback_locale=fallback_locale)
 
 
 def _is_reply_to_bot(payload: dict[str, Any]) -> bool:

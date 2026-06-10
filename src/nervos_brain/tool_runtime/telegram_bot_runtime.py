@@ -345,12 +345,14 @@ class _TelegramMessageProgress:
         chat_id: str | None,
         envelope: dict[str, Any],
         config: ProgressUpdateConfig,
+        locale: str,
         enabled: bool,
     ) -> None:
         self._api = api
         self._chat_id = str(chat_id or "").strip()
         self._envelope = envelope
         self._config = config
+        self._locale = str(locale or "zh-CN")
         self._enabled = bool(enabled and self._chat_id and config.should_run)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -375,7 +377,7 @@ class _TelegramMessageProgress:
         if self._stop.wait(self._config.first_after_s):
             return
         for idx in range(self._config.max_updates):
-            self._send_once(self._config.message_for(idx))
+            self._send_once(self._config.message_for(idx, locale=self._locale))
             if idx >= self._config.max_updates - 1:
                 return
             if self._stop.wait(self._config.interval_s):
@@ -678,6 +680,7 @@ class TelegramPollingGateway:
                 chat_id=chat_id or raw_chat_id,
                 envelope=envelope,
                 config=self._progress_update_config,
+                locale=str(state.get("locale") or envelope.get("locale_hint") or "zh-CN"),
                 enabled=not dry_run,
             )
             typing_progress.start()

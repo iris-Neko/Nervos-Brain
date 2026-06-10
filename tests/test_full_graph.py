@@ -1319,6 +1319,7 @@ class TestFormatRepairNode:
         from nervos_brain.graph_engine.full_nodes import format_repair
         state = {
             "request_id": "r1",
+            "locale": "zh-CN",
             "_final_response": {
                 "request_id": "r1",
                 "text": "答案 [1] 代码块\n```python\nprint('hello')",
@@ -1333,6 +1334,47 @@ class TestFormatRepairNode:
         assert len(resp["citations"]) == 1
         assert "## 参考来源" in resp["text"]
         assert "https://a.com" in resp["text"]
+
+    def test_format_repair_uses_english_reference_section_for_english_locale(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-en-ref-section",
+            "locale": "en",
+            "_final_response": {
+                "request_id": "r-en-ref-section",
+                "text": "Answer [1]",
+                "citations": [
+                    {"label": "[1]", "url": "https://a.com", "anchor": "s1", "title": ""},
+                ],
+            },
+        }
+
+        result = format_repair(state)
+        text = result["_final_response"]["text"]
+        assert "## References" in text
+        assert "## 参考来源" not in text
+        assert "**https://a.com**" in text
+
+    def test_format_repair_does_not_append_uncertainty_note_when_reflection_exhausted(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-no-uncertainty-note",
+            "reflection_decision": "revise_answer",
+            "_reflection_rounds_post": 1,
+            "budget": {"max_reflection_rounds_post": 1},
+            "_final_response": {
+                "request_id": "r-no-uncertainty-note",
+                "text": "答案 [1]",
+                "citations": [
+                    {"label": "[1]", "url": "https://a.com", "anchor": "s1", "title": "Doc A"},
+                ],
+            },
+        }
+
+        result = format_repair(state)
+        text = result["_final_response"]["text"]
+        assert "当前回答存在不确定性" not in text
+        assert "## 参考来源" in text
 
     def test_format_repair_does_not_duplicate_existing_reference_section(self):
         from nervos_brain.graph_engine.full_nodes import format_repair
@@ -1349,6 +1391,23 @@ class TestFormatRepairNode:
         result = format_repair(state)
         text = result["_final_response"]["text"]
         assert text.count("## 参考来源") == 1
+
+    def test_format_repair_does_not_duplicate_existing_english_reference_section(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-en-existing-ref-section",
+            "locale": "en",
+            "_final_response": {
+                "request_id": "r-en-existing-ref-section",
+                "text": "Answer [1]\n\n## References\n\n[1] Existing\nhttps://a.com",
+                "citations": [
+                    {"label": "[1]", "url": "https://a.com", "anchor": "s1", "title": "Doc A"},
+                ],
+            },
+        }
+        result = format_repair(state)
+        text = result["_final_response"]["text"]
+        assert text.count("## References") == 1
 
     def test_builds_platform_outbound_message(self):
         from nervos_brain.graph_engine.full_nodes import format_repair

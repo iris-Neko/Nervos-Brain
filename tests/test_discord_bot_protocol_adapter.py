@@ -31,7 +31,35 @@ def test_discord_message_to_envelope_basic_text():
     assert env["context"]["user_id"] == "u-1"
     assert env["context"]["channel_id"] == "c-1"
     assert env["context"]["guild_id"] == "g-1"
-    assert env["locale_hint"] == "en-US"
+    assert env["locale_hint"] == "en"
+
+
+def test_discord_message_to_envelope_prefers_english_text_over_chinese_author_locale():
+    payload = {
+        "id": "m-100",
+        "content": "What is CKB, I am a rookie",
+        "timestamp": "2024-03-22T10:11:12Z",
+        "author": {"id": "u-1", "locale": "zh-CN"},
+        "channel_id": "c-1",
+        "guild_id": "g-1",
+    }
+    env = discord_message_to_message_envelope(payload)
+
+    assert env["locale_hint"] == "en"
+
+
+def test_discord_message_to_envelope_prefers_chinese_text_over_english_author_locale():
+    payload = {
+        "id": "m-100",
+        "content": "CKB 是什么？我是新手",
+        "timestamp": "2024-03-22T10:11:12Z",
+        "author": {"id": "u-1", "locale": "en-US"},
+        "channel_id": "c-1",
+        "guild_id": "g-1",
+    }
+    env = discord_message_to_message_envelope(payload)
+
+    assert env["locale_hint"] == "zh-CN"
 
 
 def test_discord_message_to_envelope_command_reply_and_attachments():
@@ -57,7 +85,7 @@ def test_discord_message_to_envelope_command_reply_and_attachments():
     assert env["command_args"] == "fiber open channel"
     assert env["reply_to_message_id"] == "m-previous"
     assert env["context"]["thread_id"] == "t-2"
-    assert env["locale_hint"] == "zh-CN"
+    assert env["locale_hint"] == "en"
     kinds = {item["kind"] for item in env["attachments"]}
     assert kinds == {"image", "file", "link"}
 

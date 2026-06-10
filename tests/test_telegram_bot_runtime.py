@@ -720,16 +720,45 @@ def test_process_update_sends_visible_progress_for_slow_graph():
         ),
     )
 
-    row = gateway.process_update(_sample_update(text="@NBCKB_Bot hello"), dry_run=False)
+    row = gateway.process_update(_sample_update(text="@NBCKB_Bot How to set up a Fiber node?"), dry_run=False)
 
     assert row["ignored"] is False
     progress_requests = [
         item for item in fake_api.callback_requests
-        if item["method"] == "sendMessage" and str(item["payload"].get("text", "")).startswith("还在处理")
+        if item["method"] == "sendMessage" and "checking sources" in str(item["payload"].get("text", ""))
     ]
     assert len(progress_requests) >= 1
     assert progress_requests[0]["payload"]["reply_to_message_id"] == 1
     assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
+
+
+def test_process_update_sends_chinese_visible_progress_for_chinese_question():
+    fake_api = _FakeAPI()
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.04)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        progress_update_config=ProgressUpdateConfig(
+            enabled=True,
+            first_after_s=0.01,
+            interval_s=0.01,
+            max_updates=1,
+            messages=("还在处理",),
+        ),
+    )
+
+    row = gateway.process_update(_sample_update(text="@NBCKB_Bot CKB 是什么？"), dry_run=False)
+
+    assert row["ignored"] is False
+    progress_requests = [
+        item for item in fake_api.callback_requests
+        if item["method"] == "sendMessage" and item["payload"].get("text") == "还在处理"
+    ]
+    assert len(progress_requests) == 1
 
 
 def test_process_update_does_not_send_visible_progress_for_fast_graph():

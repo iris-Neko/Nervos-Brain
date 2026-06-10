@@ -15,6 +15,7 @@ from nervos_brain.tool_runtime.discord_bot_runtime import (
     DiscordBotRuntime,
     DiscordBotRuntimeError,
     DiscordGateway,
+    _detect_discord_progress_locale,
     _send_discord_progress_updates,
 )
 from nervos_brain.tool_runtime.fast_mode import FastModeStateStore
@@ -582,6 +583,16 @@ def test_fast_command_works_as_discord_runtime_command_in_guild(tmp_path: Path):
     assert store.is_pending(platform="discord", user_id="u-1") is True
 
 
+def test_discord_progress_locale_strips_bot_mention_and_prefers_message_language():
+    payload = _sample_payload(
+        text="<@999> How to set up a Fiber node?",
+        mention_user_ids=["999"],
+    )
+    payload["author"]["locale"] = "zh-CN"
+
+    assert _detect_discord_progress_locale(payload, "999") == "en"
+
+
 class _FakeDiscordChannel:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
@@ -615,11 +626,35 @@ def test_discord_progress_updates_send_visible_replies():
                 max_updates=2,
                 messages=("还在处理 1", "还在处理 2"),
             ),
+            locale="en",
         )
     )
 
-    assert [item["content"] for item in message.replies] == ["还在处理 1", "还在处理 2"]
+    assert [item["content"] for item in message.replies] == [
+        "I am still checking sources and organizing the evidence. Please wait a moment.",
+        "There is quite a bit of material, so I am verifying the sources and shaping the answer.",
+    ]
     assert message.channel.sent == []
+
+
+def test_discord_progress_updates_send_chinese_visible_replies():
+    message = _FakeDiscordMessage()
+
+    asyncio.run(
+        _send_discord_progress_updates(
+            message=message,
+            config=ProgressUpdateConfig(
+                enabled=True,
+                first_after_s=0.01,
+                interval_s=0.01,
+                max_updates=1,
+                messages=("还在处理",),
+            ),
+            locale="zh-CN",
+        )
+    )
+
+    assert [item["content"] for item in message.replies] == ["还在处理"]
 
 
 def test_discord_progress_updates_fallback_to_channel_send_when_reply_fails():
@@ -635,8 +670,11 @@ def test_discord_progress_updates_fallback_to_channel_send_when_reply_fails():
                 max_updates=1,
                 messages=("还在处理",),
             ),
+            locale="en",
         )
     )
 
     assert message.replies == []
-    assert [item["content"] for item in message.channel.sent] == ["还在处理"]
+    assert [item["content"] for item in message.channel.sent] == [
+        "I am still checking sources and organizing the evidence. Please wait a moment."
+    ]

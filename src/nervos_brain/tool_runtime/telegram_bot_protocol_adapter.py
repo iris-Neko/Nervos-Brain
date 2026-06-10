@@ -15,6 +15,7 @@ from typing import Any
 from nervos_brain.core_protocols.message_protocols import MessageEnvelope, OutboundMessage
 
 from .feedback import build_csat_callback_data
+from .language_detection import detect_message_locale
 
 
 def telegram_update_to_message_envelope(
@@ -95,10 +96,11 @@ def telegram_update_to_message_envelope(
             message["command_args"] = command_args
 
     locale = sender.get("language_code")
-    if isinstance(locale, str) and locale.strip():
-        message["locale_hint"] = locale.strip()
-    else:
-        message["locale_hint"] = default_locale
+    fallback_locale = locale.strip() if isinstance(locale, str) and locale.strip() else default_locale
+    message["locale_hint"] = detect_message_locale(
+        command_args if command_args is not None else text,
+        fallback_locale=fallback_locale,
+    )
 
     return message
 
