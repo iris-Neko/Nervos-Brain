@@ -221,6 +221,72 @@ def test_reflection_post_compat_old_self_check_format():
     assert out["_self_check_pass"] is True
 
 
+def test_reflection_post_accepts_inline_citation_tags_in_fallback():
+    state = _base_state(
+        evidence=[
+            {
+                "id": "ev1",
+                "source": "qdrant",
+                "title": "Doc A",
+                "url": "https://a.example",
+                "anchor": "a",
+                "snippet": "open_channel(...)",
+                "score": 0.9,
+                "payload": {"source": "rfcs"},
+                "hash": "h1",
+                "retrieved_ts_ms": 1,
+            }
+        ],
+        _final_response={
+            "request_id": "r-ref-1",
+            "text": "调用 open_channel 即可 {{cite:E1}}",
+            "citations": [],
+        },
+    )
+    with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", side_effect=RuntimeError("boom")):
+        out = reflection_post(state)
+
+    assert out["reflection_decision"] == "accept_answer"
+    assert out["_self_check_pass"] is True
+
+
+def test_reflection_post_sends_compiled_inline_citations_to_self_check():
+    state = _base_state(
+        evidence=[
+            {
+                "id": "ev1",
+                "source": "qdrant",
+                "title": "Doc A",
+                "url": "https://a.example",
+                "anchor": "a",
+                "snippet": "open_channel(...)",
+                "score": 0.9,
+                "payload": {"source": "rfcs"},
+                "hash": "h1",
+                "retrieved_ts_ms": 1,
+            }
+        ],
+        _final_response={
+            "request_id": "r-ref-1",
+            "text": "调用 open_channel 即可 {{cite:E1}}",
+            "citations": [],
+        },
+    )
+    captured = {}
+
+    def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
+        _ = system_prompt
+        captured["user_prompt"] = user_prompt
+        return {"pass": True, "issues": [], "reasoning": "ok"}
+
+    with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
+        out = reflection_post(state)
+
+    assert out["reflection_decision"] == "accept_answer"
+    assert "调用 open_channel 即可 [1]" in captured["user_prompt"]
+    assert "[1]: Doc A (https://a.example)" in captured["user_prompt"]
+
+
 def test_reflection_post_demotes_ask_user_without_required_info_to_revise():
     state = _base_state(
         info_needs=[

@@ -172,7 +172,13 @@ class TestFiberChannelScenario:
                 "budget": {"max_tool_calls": 3},
             }),
             "证据评分": json.dumps({"grade": "enough", "reasoning": "证据覆盖了核心问题"}),
-            "回答组装": f"使用 Fiber SDK 开通支付通道需要调用 `open_channel()` 方法 [1]。\n\n```typescript\nconst channel = await fiber.openChannel({{ peerId, capacity: '1000000000' }});\n``` [2]\n",
+            "回答组装": (
+                "使用 Fiber SDK 开通支付通道需要调用 `open_channel()` 方法 {{cite:E1}}。\n\n"
+                "```typescript\n"
+                "const channel = await fiber.openChannel({ peerId, capacity: '1000000000' });\n"
+                "```\n"
+                "这个示例来自 SDK 示例代码 {{cite:E2}}。\n"
+            ),
             "自检": json.dumps({"pass": True, "issues": [], "reasoning": "引用完整，格式正确"}),
         }
 
@@ -452,7 +458,7 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm(system_prompt, user_prompt, **_kwargs):
             _ = system_prompt, user_prompt
-            return "Tentacle 支持 P2P 多路复用和加密通信。[1][2]"
+            return "Tentacle 支持 P2P 多路复用 {{cite:E1}} 和加密通信 {{cite:E2}}。"
 
         state = _make_state(
             user_message={"content": "tentacle支持哪些通信方式和协议？"},
@@ -918,7 +924,7 @@ class TestSingleRetrievalScenario:
         def mock_call_llm(system_prompt, user_prompt, **_kwargs):
             assert "回答组装器" in system_prompt
             assert "Nervos Brain" in user_prompt
-            return "Nervos Brain 目前处于早期工程化推进阶段，已打通数据入库和 RAG 闭环 [1]。"
+            return "Nervos Brain 目前处于早期工程化推进阶段，已打通数据入库和 RAG 闭环 {{cite:E1}}。"
 
         transport = FakeTransport()
         state = _make_state(
@@ -974,7 +980,7 @@ class TestSingleRetrievalScenario:
             _ = user_prompt, json_mode, model, temperature, max_tokens
             if "回答组装" in system_prompt:
                 call_counter["answer"] += 1
-                return "CKB 是 Nervos 的 Layer 1 区块链 [1]。"
+                return "CKB 是 Nervos 的 Layer 1 区块链 {{cite:E1}}。"
             return ""
 
         class FakeRetriever:
@@ -1135,7 +1141,7 @@ class TestEvidenceConflictScenario:
         def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048):
             if "回答组装" in system_prompt:
                 call_counter["answer"] += 1
-                return "Fiber 通道的正确用法是... [1]"
+                return "Fiber 通道的正确用法是... {{cite:E1}}"
             return json.dumps(mock_call_llm_json(system_prompt, user_prompt))
 
         state = _make_state(
@@ -1354,6 +1360,116 @@ class TestFormatRepairNode:
         assert "## References" in text
         assert "## 参考来源" not in text
         assert "**https://a.com**" in text
+
+    def test_format_repair_compiles_inline_evidence_citations(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-inline-cites",
+            "locale": "en",
+            "evidence": [
+                {"title": "Doc A", "url": "https://a.com", "anchor": "a1"},
+                {"title": "Doc B", "url": "https://b.com", "anchor": "b1"},
+            ],
+            "_final_response": {
+                "request_id": "r-inline-cites",
+                "text": "Second fact {{cite:E2}}. First fact {{ cite: E1 }}.",
+                "citations": [],
+            },
+        }
+
+        result = format_repair(state)
+        resp = result["_final_response"]
+        text = resp["text"]
+        assert "Second fact [1]. First fact [2]." in text
+        assert "{{cite:" not in text
+        assert resp["citations"] == [
+            {"label": "[1]", "url": "https://b.com", "anchor": "b1", "title": "Doc B"},
+            {"label": "[2]", "url": "https://a.com", "anchor": "a1", "title": "Doc A"},
+        ]
+        assert "## References" in text
+        assert "[1] **Doc B**" in text
+        assert "[2] **Doc A**" in text
+
+    def test_format_repair_reuses_duplicate_inline_evidence_citations(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-inline-duplicate",
+            "evidence": [
+                {"title": "Doc A", "url": "https://a.com", "anchor": "a1"},
+            ],
+            "_final_response": {
+                "request_id": "r-inline-duplicate",
+                "text": "Fact {{cite:E1}}. Same source {{cite:E1}}.",
+                "citations": [],
+            },
+        }
+
+        result = format_repair(state)
+        resp = result["_final_response"]
+        assert "Fact [1]. Same source [1]." in resp["text"]
+        assert len(resp["citations"]) == 1
+
+    def test_format_repair_drops_invalid_inline_evidence_citations(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-inline-invalid",
+            "evidence": [
+                {"title": "Doc A", "url": "https://a.com", "anchor": "a1"},
+            ],
+            "_final_response": {
+                "request_id": "r-inline-invalid",
+                "text": "Valid {{cite:E1}}. Invalid {{cite:E99}}.",
+                "citations": [],
+            },
+        }
+
+        result = format_repair(state)
+        resp = result["_final_response"]
+        assert "Valid [1]. Invalid ." in resp["text"]
+        assert len(resp["citations"]) == 1
+
+    def test_format_repair_ignores_inline_citations_inside_code_blocks(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-inline-code",
+            "evidence": [
+                {"title": "Doc A", "url": "https://a.com", "anchor": "a1"},
+            ],
+            "_final_response": {
+                "request_id": "r-inline-code",
+                "text": "Use this {{cite:E1}}\n```txt\nliteral {{cite:E1}}\n```",
+                "citations": [],
+            },
+        }
+
+        result = format_repair(state)
+        text = result["_final_response"]["text"]
+        assert "Use this [1]" in text
+        assert "literal {{cite:E1}}" in text
+
+    def test_format_repair_prefers_inline_citations_over_legacy_labels(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+        state = {
+            "request_id": "r-inline-mixed",
+            "evidence": [
+                {"title": "Doc A", "url": "https://a.com", "anchor": "a1"},
+            ],
+            "_final_response": {
+                "request_id": "r-inline-mixed",
+                "text": "Inline {{cite:E1}}. Old [3].",
+                "citations": [
+                    {"label": "[3]", "url": "https://wrong.com", "anchor": "w", "title": "Wrong"},
+                ],
+            },
+        }
+
+        result = format_repair(state)
+        resp = result["_final_response"]
+        assert "Inline [1]. Old ." in resp["text"]
+        assert resp["citations"] == [
+            {"label": "[1]", "url": "https://a.com", "anchor": "a1", "title": "Doc A"},
+        ]
+        assert "https://wrong.com" not in resp["text"]
 
     def test_format_repair_does_not_append_uncertainty_note_when_reflection_exhausted(self):
         from nervos_brain.graph_engine.full_nodes import format_repair
@@ -2049,6 +2165,8 @@ class TestPromptBoundaries:
         assert "默认回答要短、贴题、先给可执行主线" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "资料推荐 / 靠谱资料 / 从哪里开始" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不要直接输出最终引用编号" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "不要把答案扩写成完整大教程" in prompts.ANSWER_COMPOSER_SYSTEM
 
     def test_direct_answer_prompt_defers_project_and_source_requests_to_retrieval(self):
@@ -2163,7 +2281,7 @@ class TestRuntimeInjection:
         state = _make_state(user_message={"content": "什么是 ckb"}, force_retrieval=True)
 
         mock_llm_responses = {
-            "回答组装": "CKB 是 Nervos 的一层网络 [1]。",
+            "回答组装": "CKB 是 Nervos 的一层网络 {{cite:E1}}。",
         }
         mock_json_responses = {
             "信息缺口评估": {
@@ -2329,7 +2447,7 @@ class TestNodeModelRouter:
                     "max_tokens": max_tokens,
                 }
             )
-            return "这里是完整 TypeScript 代码 [1]。"
+            return "这里是完整 TypeScript 代码 {{cite:E1}}。"
 
         state = _make_state(
             user_message={"content": "写完整 TS 交易调用代码"},

@@ -1798,6 +1798,64 @@ def _append_reference_section(text: str, citations: list[dict[str, Any]], *, loc
     return text.strip() + f"\n\n## {heading}\n\n" + "\n\n".join(rows)
 
 
+_INLINE_CITE_RE = re.compile(r"\{\{\s*cite\s*:\s*E(\d+)\s*\}\}", re.IGNORECASE)
+_LEGACY_CITE_RE = re.compile(r"\[\d+\]")
+_FENCED_CODE_RE = re.compile(r"(```[\s\S]*?```)")
+
+
+def _has_inline_citation_tags(text: str) -> bool:
+    return bool(_INLINE_CITE_RE.search(str(text or "")))
+
+
+def _compile_inline_citations(
+    text: str,
+    evidence: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, str]]]:
+    evidence_by_id: dict[str, dict[str, Any]] = {
+        f"E{idx}": ev
+        for idx, ev in enumerate(evidence[:10], start=1)
+        if isinstance(ev, dict)
+    }
+    label_by_evidence_id: dict[str, str] = {}
+    citations: list[dict[str, str]] = []
+
+    def citation_for(evidence_id: str) -> str:
+        ev = evidence_by_id.get(evidence_id)
+        if not ev:
+            return ""
+        label = label_by_evidence_id.get(evidence_id)
+        if label:
+            return label
+        label = f"[{len(citations) + 1}]"
+        label_by_evidence_id[evidence_id] = label
+        citations.append(
+            {
+                "label": label,
+                "url": str(ev.get("url", "") or ""),
+                "anchor": str(ev.get("anchor", "") or ""),
+                "title": str(ev.get("title", "") or ""),
+            }
+        )
+        return label
+
+    def replace_tags(chunk: str) -> str:
+        def repl(match: re.Match[str]) -> str:
+            return citation_for(f"E{match.group(1)}")
+
+        return _INLINE_CITE_RE.sub(repl, _LEGACY_CITE_RE.sub("", chunk))
+
+    parts = _FENCED_CODE_RE.split(str(text or ""))
+    rendered: list[str] = []
+    for part in parts:
+        if part.startswith("```") and part.endswith("```"):
+            rendered.append(part)
+        else:
+            rendered.append(replace_tags(part))
+    cleaned = "".join(rendered)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip(), citations
+
+
 def _required_questions(info_needs: list[dict]) -> list[str]:
     questions: list[str] = []
     for need in info_needs:
@@ -1923,6 +1981,8 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
         citations = []
 
     evidence = state.get("evidence", [])
+    if isinstance(evidence, list) and _has_inline_citation_tags(text):
+        text, citations = _compile_inline_citations(text, evidence)
     conflicts = state.get("conflicts", [])
     compose_error = state.get("_compose_error")
     question = _effective_question(state)
@@ -2046,6 +2106,10 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
     citations = response.get("citations", [])
     if not isinstance(citations, list):
         citations = []
+    review_answer = draft_answer
+    review_citations = citations
+    if stage == "post_answer" and _has_inline_citation_tags(draft_answer):
+        review_answer, review_citations = _compile_inline_citations(draft_answer, evidence)
 
     round_key = "_reflection_rounds_post" if stage == "post_answer" else "_reflection_rounds_pre"
     reflection_round = _int_like(state.get(round_key, 0)) + 1
@@ -2060,8 +2124,8 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
         evidence_summary=_summarize_evidence(evidence),
         conflict_count=len(conflicts),
         conflicts_summary=_summarize_conflicts(conflicts),
-        draft_answer=draft_answer[:2400] or "(暂无草稿)",
-        citations_summary=_summarize_citations(citations),
+        draft_answer=review_answer[:2400] or "(暂无草稿)",
+        citations_summary=_summarize_citations(review_citations),
         hop_count=_int_like(state.get("hop_count", 0)),
         reflection_round=reflection_round,
         time_budget=_time_budget_prompt(state),
@@ -2340,7 +2404,8 @@ def answer_composer(state: dict) -> dict:
     evidence_block = ""
     for i, ev in enumerate(evidence[:10], start=1):
         evidence_block += (
-            f"\n--- 证据 [{i}] ---\n"
+            f"\n--- 证据 E{i} ---\n"
+            f"证据 ID: E{i}\n"
             f"来源: {ev.get('source', '?')}\n"
             f"标题: {ev.get('title', '?')}\n"
             f"URL: {ev.get('url', '')}\n"
@@ -2397,19 +2462,10 @@ def answer_composer(state: dict) -> dict:
             compose_error["message"],
         )
 
-    citations = []
-    for i, ev in enumerate(evidence[:10], start=1):
-        citations.append({
-            "label": f"[{i}]",
-            "url": ev.get("url", ""),
-            "anchor": ev.get("anchor", ""),
-            "title": ev.get("title", ""),
-        })
-
     response = {
         "request_id": request_id,
         "text": answer_text,
-        "citations": citations,
+        "citations": [],
     }
     if compose_error:
         response["trace_summary"] = (
@@ -2421,10 +2477,9 @@ def answer_composer(state: dict) -> dict:
         update["_compose_error"] = compose_error
     else:
         logger.debug(
-            "answer_composer success request_id=%s chars=%d citations=%d",
+            "answer_composer success request_id=%s chars=%d",
             request_id,
             len(answer_text),
-            len(citations),
         )
     return update
 
@@ -2456,7 +2511,13 @@ def format_repair(state: dict) -> dict:
     citations = response.get("citations", [])
 
     text = sanitize_markdown(text)
-    text, citations = normalize_citations(text, citations)
+    if _has_inline_citation_tags(text):
+        evidence = state.get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = []
+        text, citations = _compile_inline_citations(text, evidence)
+    else:
+        text, citations = normalize_citations(text, citations)
     text = _append_reference_section(text, citations, locale=str(state.get("locale", "zh-CN")))
 
     response["text"] = text

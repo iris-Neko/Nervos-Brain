@@ -122,9 +122,7 @@ class TestTimeout:
             timeout_ms=100,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            execute_tool(req, slow_handler)
-        )
+        result = asyncio.run(execute_tool(req, slow_handler))
         assert result["status"] == "cancelled"
         assert result["ok"] is False
 
@@ -141,9 +139,7 @@ class TestTimeout:
         )
         req["deadline_ts_ms"] = int(time.time() * 1000) - 1000
 
-        result = asyncio.get_event_loop().run_until_complete(
-            execute_tool(req, fast_handler)
-        )
+        result = asyncio.run(execute_tool(req, fast_handler))
         assert result["status"] == "cancelled"
 
     def test_handler_exception_returns_error(self):
@@ -159,9 +155,7 @@ class TestTimeout:
             timeout_ms=1_000,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            execute_tool(req, boom_handler)
-        )
+        result = asyncio.run(execute_tool(req, boom_handler))
         assert result["status"] == "error"
         assert result["error"]["code"] == "ERR_TOOL_EXECUTION_FAILED"
 
