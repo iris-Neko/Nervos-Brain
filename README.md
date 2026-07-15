@@ -2,7 +2,7 @@
 
 Nervos Brain 是面向 CKB/Nervos 的 Telegram / Discord Agentic RAG Bot。它把官方文档、Nervos Talk 论坛讨论和 GitHub 源码资料接入统一检索流程，并通过 LangGraph 完成信息缺口判断、检索规划、证据合并、回答生成、反思检查和平台格式化。
 
-默认部署目标是 Linux + `mamba` + Docker Qdrant server + Telegram/Discord Bot runtime。
+默认部署目标是 Linux + Conda/Mamba + Docker Qdrant server + Telegram/Discord Bot runtime。
 
 ## 快速部署
 
@@ -13,11 +13,13 @@ cd Nervos-Brain
 git checkout dev  # 当前交付/部署分支
 git lfs pull
 
-mamba env create -f environment.yml
+conda env create -f environment.yml
 # 如果环境已存在，改用：
-# mamba env update -n nervos-brain -f environment.yml --prune
+# conda env update -n nervos-brain -f environment.yml --prune
 cp config.yaml.example config.yaml
 ```
+
+如果机器安装了 `mamba` 或 `micromamba`，也可以把上面的 `conda` 换成对应命令。项目自带脚本会自动探测 `mamba`、`micromamba`、`conda`；需要指定时可设置 `ENV_RUNNER_BIN=/path/to/conda`。
 
 编辑 `config.yaml` 或通过环境变量填写本地密钥。最低必填项是 LLM API 配置，以及要启动的平台 Bot token：
 
@@ -41,7 +43,7 @@ bash restart_telegram_bot.sh
 启动 Discord Bot：
 
 ```bash
-mamba run -n nervos-brain python scripts/run_discord_bot.py
+conda run -n nervos-brain python scripts/run_discord_bot.py
 ```
 
 更完整的 fresh clone 部署流程见 [docs/deployment.md](docs/deployment.md)。
@@ -108,12 +110,12 @@ Docker Qdrant server 运行目录
 
 ```bash
 bash -n bootstrap_qdrant_server.sh restart_telegram_bot.sh
-mamba run -n nervos-brain python -m py_compile \
+conda run -n nervos-brain python -m py_compile \
   scripts/migrate_qdrant_server_from_archive.py \
   scripts/run_talk_mcp_server.py \
   scripts/run_talk_forum_ingest.py
 # 全量测试较重，需要时再运行：
-# mamba run -n nervos-brain pytest -q
+# conda run -n nervos-brain pytest -q
 ```
 
 更多测试和验收命令见 [docs/testing-and-acceptance.md](docs/testing-and-acceptance.md)。

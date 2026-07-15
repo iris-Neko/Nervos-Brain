@@ -1,6 +1,6 @@
 # 新服务器部署
 
-本文档描述从 fresh clone 到 Bot 可运行的标准流程。默认目标环境是 Linux、`mamba`、Docker、Docker Qdrant server 和 `nervos-brain` Python 环境。
+本文档描述从 fresh clone 到 Bot 可运行的标准流程。默认目标环境是 Linux、Conda/Mamba、Docker、Docker Qdrant server 和 `nervos-brain` Python 环境。
 
 ## 1. 准备系统依赖
 
@@ -9,7 +9,7 @@
 ```text
 git
 git-lfs
-mamba 或 miniforge
+conda、mamba 或 micromamba
 Docker 和 Docker Compose
 ```
 
@@ -18,7 +18,7 @@ Docker 和 Docker Compose
 ```bash
 git --version
 git lfs version
-mamba --version
+conda --version  # 或 mamba --version / micromamba --version
 docker --version
 docker compose version
 ```
@@ -46,11 +46,13 @@ data/github_code/archive.db
 ## 3. 创建 Python 环境
 
 ```bash
-mamba env create -f environment.yml
+conda env create -f environment.yml
 # 如果 nervos-brain 环境已存在，改用：
-# mamba env update -n nervos-brain -f environment.yml --prune
-mamba run -n nervos-brain python --version
+# conda env update -n nervos-brain -f environment.yml --prune
+conda run -n nervos-brain python --version
 ```
+
+如果机器安装了 `mamba` 或 `micromamba`，上面的 `conda` 可以替换为对应命令。项目自带脚本会按 `mamba`、`micromamba`、`conda` 的顺序自动探测；也可以用 `ENV_RUNNER_BIN=/path/to/conda` 显式指定。
 
 本项目测试和脚本默认从仓库运行，不要求 `pip install -e .`。
 
@@ -119,7 +121,7 @@ data/logs/telegram_bot_polling.stderr.log
 
 ```bash
 export DISCORD_BOT_TOKEN="<DISCORD_BOT_TOKEN>"
-mamba run -n nervos-brain python scripts/run_discord_bot.py
+conda run -n nervos-brain python scripts/run_discord_bot.py
 ```
 
 这个命令是前台运行，适合首次验证。长期运行请用 `tmux`、`systemd`、`supervisor` 或部署方已有进程管理；当前仓库暂未提供 Discord 专用 restart 脚本。Discord 配置见 `config.yaml.example` 的 `discord_bot` 区块。
@@ -138,8 +140,8 @@ Discord 也不建议用同一个 Bot token 启多个 gateway 进程。首次部�
 
 ```bash
 bash -n bootstrap_qdrant_server.sh restart_telegram_bot.sh
-mamba run -n nervos-brain pytest tests/test_qdrant_server_migration.py tests/test_retrieval_unit.py -q
-mamba run -n nervos-brain python -m py_compile \
+conda run -n nervos-brain pytest tests/test_qdrant_server_migration.py tests/test_retrieval_unit.py -q
+conda run -n nervos-brain python -m py_compile \
   scripts/migrate_qdrant_server_from_archive.py \
   scripts/run_talk_mcp_server.py \
   scripts/run_talk_forum_ingest.py

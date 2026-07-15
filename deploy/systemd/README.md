@@ -9,7 +9,7 @@ Talk forum 数据库已经完成全量爬取；这个 timer 只负责每天抓�
 默认频率：每 24 小时一次。默认命令：
 
 ```bash
-mamba run -n nervos-brain python scripts/run_talk_forum_ingest.py --latest-pages 3 --incremental
+conda run -n nervos-brain python scripts/run_talk_forum_ingest.py --latest-pages 3 --incremental
 ```
 
 为当前 Linux 用户安装：
@@ -22,12 +22,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now nervos-talk-forum-ingest.timer
 ```
 
-如果仓库路径或 mamba 路径不同，安装前需要编辑这些 service 变量：
+如果仓库路径、环境名或 Conda/Mamba 路径不同，安装前需要编辑这些 service 变量：
 
 ```ini
 Environment=PROJECT_ROOT=%h/path/to/Nervos-Brain
-Environment=MAMBA_BIN=%h/miniforge3/bin/mamba
-Environment=MAMBA_ENV=nervos-brain
+Environment=ENV_RUNNER_BIN=%h/miniconda3/bin/conda
+Environment=ENV_NAME=nervos-brain
 Environment=TALK_LATEST_PAGES=3
 ```
 
@@ -47,8 +47,8 @@ GitHub docs/code 语料默认每周刷新一次。运行 state 保存在 `data/i
 默认命令：
 
 ```bash
-mamba run -n nervos-brain python scripts/run_github_docs_ingest.py --incremental
-mamba run -n nervos-brain python scripts/run_github_code_ingest.py --incremental
+conda run -n nervos-brain python scripts/run_github_docs_ingest.py --incremental
+conda run -n nervos-brain python scripts/run_github_code_ingest.py --incremental
 ```
 
 安装用户 timer：

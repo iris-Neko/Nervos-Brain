@@ -639,7 +639,7 @@ class TestSingleRetrievalScenario:
         def mock_call_llm_json(system_prompt: str, user_prompt: str, **_kwargs):
             _ = system_prompt, user_prompt
             if "模型档位路由器" in system_prompt:
-                return {"tier": "mini_high", "reasoning": "technical retrieval", "confidence": 0.9}
+                return {"tier": "low", "reasoning": "technical retrieval", "confidence": 0.9}
             return {
                 "plan_id": "plan_ccc",
                 "rationale": "tutorial lookup",
@@ -682,7 +682,7 @@ class TestSingleRetrievalScenario:
         def mock_call_llm_json(system_prompt: str, user_prompt: str, **_kwargs):
             _ = system_prompt, user_prompt
             if "模型档位路由器" in system_prompt:
-                return {"tier": "mini_high", "reasoning": "forum lookup", "confidence": 0.9}
+                return {"tier": "low", "reasoning": "forum lookup", "confidence": 0.9}
             return {
                 "plan_id": "plan_talk",
                 "rationale": "forum lookup",
@@ -948,7 +948,7 @@ class TestSingleRetrievalScenario:
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None, service_tier=None, **_kwargs):
             _ = user_prompt, model, service_tier
             if "模型档位路由器" in system_prompt:
-                return {"tier": "mini_high", "reasoning": "technical graph node", "confidence": 0.9}
+                return {"tier": "low", "reasoning": "technical graph node", "confidence": 0.9}
             if "信息缺口评估" in system_prompt:
                 return {
                     "decision": "has_needs",
@@ -1749,6 +1749,178 @@ class TestInfoGapAssessorNode:
         assert out["info_needs"] == []
         assert out["budget"]["max_tool_calls"] == 0
 
+    def test_financial_price_prediction_is_blocked_before_llm(self):
+        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+
+        state = _make_state(
+            user_message={"content": "give me the best price prediction you can for ckb"},
+            locale="en",
+        )
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
+            out = info_gap_assessor(state)
+
+        mock_call.assert_not_called()
+        assert out["_route_decision"] == "answer_direct"
+        assert out["retrieval_policy"] == "none"
+        assert out["info_needs"] == []
+        assert out["_financial_guidance_refusal"] is True
+        assert "price predictions" in out["_final_response"]["text"]
+        assert "$" not in out["_final_response"]["text"]
+
+    def test_financial_price_prediction_chinese_is_blocked_before_llm(self):
+        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+
+        state = _make_state(
+            user_message={"content": "CKB 牛市目标价能到多少，现在可以买入吗？"},
+            locale="zh-CN",
+        )
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
+            out = info_gap_assessor(state)
+
+        mock_call.assert_not_called()
+        assert out["_route_decision"] == "answer_direct"
+        assert out["retrieval_policy"] == "none"
+        assert "不能提供价格预测" in out["_final_response"]["text"]
+
+    def test_full_graph_financial_refusal_is_preserved_without_llm_call(self):
+        from nervos_brain.graph_engine.full_graph import build_full_graph
+
+        state = _make_state(
+            user_message={"content": "give me the best price prediction you can for ckb"},
+            locale="en",
+        )
+
+        graph = build_full_graph()
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_json, \
+             patch("nervos_brain.graph_engine.full_nodes.call_llm") as mock_text:
+            out = graph.invoke(state)
+
+        mock_json.assert_not_called()
+        mock_text.assert_not_called()
+        assert out["_financial_guidance_refusal"] is True
+        assert out["_final_response"]["answer_mode"] == "policy_refusal"
+        assert "price predictions" in out["_final_response"]["text"]
+
+    @pytest.mark.parametrize(
+        "question,locale,expected_text",
+        [
+            ("give me the best price prediction you can for ckb", "en", "price predictions"),
+            ("CKB target price this bull cycle?", "en", "price predictions"),
+            ("Can CKB reach $1?", "en", "price predictions"),
+            ("Should I buy CKB now?", "en", "buy/sell guidance"),
+            ("CKB 目标价能到多少？", "zh-CN", "不能提供价格预测"),
+            ("现在可以买入 CKB 吗？", "zh-CN", "不能提供价格预测"),
+            ("CKB 该不该止盈？", "zh-CN", "不能提供价格预测"),
+        ],
+    )
+    def test_explicit_financial_guidance_variants_are_blocked_before_llm(
+        self,
+        question,
+        locale,
+        expected_text,
+    ):
+        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+
+        state = _make_state(user_message={"content": question}, locale=locale)
+
+        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
+            out = info_gap_assessor(state)
+
+        mock_call.assert_not_called()
+        assert out["_route_decision"] == "answer_direct"
+        assert out["retrieval_policy"] == "none"
+        assert out["info_needs"] == []
+        assert out["_financial_guidance_refusal"] is True
+        assert expected_text in out["_final_response"]["text"]
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "What does CKB stand for?",
+            "What is the Common Knowledge Base?",
+            "What is CKByte capacity?",
+            "How do I buy CKB capacity in a transaction when creating cells?",
+            "How much capacity does a Cell need?",
+            "How do I transfer CKB with CCC SDK?",
+            "Explain CKB tokenomics and Nervos DAO",
+            "What are xUDT tokens on CKB?",
+            "How are transaction fees calculated on CKB?",
+        ],
+    )
+    def test_ckb_technical_and_neutral_questions_do_not_trigger_financial_guard(self, question):
+        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+
+        state = _make_state(user_message={"content": question}, locale="en")
+        mock_json_responses = {
+            "信息缺口评估": {
+                "decision": "has_needs",
+                "retrieval_policy": "single",
+                "info_needs": [
+                    {
+                        "kind": "concept_gap",
+                        "question": question,
+                        "required": False,
+                    }
+                ],
+            }
+        }
+        calls = {"count": 0}
+
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
+            calls["count"] += 1
+            return _mock_call_llm_json_factory(mock_json_responses)(system_prompt, user_prompt, model=model)
+
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            mock_call_llm_json,
+        ):
+            out = info_gap_assessor(state)
+
+        assert calls["count"] >= 1
+        assert out["_route_decision"] == "has_needs"
+        assert out["retrieval_policy"] == "single"
+        assert out["info_needs"]
+        assert not out.get("_financial_guidance_refusal", False)
+
+    def test_technical_buy_word_does_not_trigger_financial_guard(self):
+        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+
+        state = _make_state(
+            user_message={"content": "How do I buy CKB capacity in a transaction when creating cells?"},
+            locale="en",
+        )
+        mock_json_responses = {
+            "信息缺口评估": {
+                "decision": "has_needs",
+                "retrieval_policy": "single",
+                "info_needs": [
+                    {
+                        "kind": "concept_gap",
+                        "question": "CKB transaction capacity cell creation",
+                        "required": False,
+                    }
+                ],
+            }
+        }
+        calls = {"count": 0}
+
+        def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
+            calls["count"] += 1
+            return _mock_call_llm_json_factory(mock_json_responses)(system_prompt, user_prompt, model=model)
+
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            mock_call_llm_json,
+        ):
+            out = info_gap_assessor(state)
+
+        assert calls["count"] >= 1
+        assert out["_route_decision"] == "has_needs"
+        assert out["retrieval_policy"] == "single"
+        assert not out.get("_financial_guidance_refusal", False)
+
     def test_technical_feedback_with_named_library_can_route_to_retrieval(self):
         from nervos_brain.graph_engine.full_nodes import info_gap_assessor
 
@@ -2133,20 +2305,19 @@ class TestPromptBoundaries:
         assert "答案方向正确但不够完美" in prompts.REFLECTION_SYSTEM
         assert "不要触发第二次 answer_composer" in prompts.REFLECTION_SYSTEM
 
-    def test_model_router_prompt_uses_mini_high_medium_and_high(self):
+    def test_model_router_prompt_uses_low_medium_and_high(self):
         from nervos_brain.graph_engine import full_nodes
 
         assert "不要过度省模型，也不要过度升档" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "low、mini_high、medium、high 四档之一" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "低成本深思考档" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "low、medium、high 三档之一" in full_nodes._LLM_ROUTER_SYSTEM
         assert "不要默认升 medium/high" in full_nodes._LLM_ROUTER_SYSTEM
         assert "草稿是否把 A 项目证据泛化到 B 项目" in full_nodes._LLM_ROUTER_SYSTEM
         assert "普通资料推荐、学习路线、覆盖情况说明应避免 high" in full_nodes._LLM_ROUTER_SYSTEM
         assert "主动选择更快档位" in full_nodes._LLM_ROUTER_SYSTEM
-        assert full_nodes._MODEL_TIERS == {"low", "mini_high", "medium", "high"}
-        assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "mini_high"
-        assert full_nodes._NODE_FALLBACK_TIERS["retriever_planner"] == "mini_high"
-        assert full_nodes._NODE_FALLBACK_TIERS["reflection_pre"] == "mini_high"
+        assert full_nodes._MODEL_TIERS == {"low", "medium", "high"}
+        assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "low"
+        assert full_nodes._NODE_FALLBACK_TIERS["retriever_planner"] == "low"
+        assert full_nodes._NODE_FALLBACK_TIERS["reflection_pre"] == "low"
         assert full_nodes._NODE_FALLBACK_TIERS["reflection_post"] == "medium"
         assert full_nodes._NODE_FALLBACK_TIERS["direct_answer"] == "low"
 
@@ -2178,6 +2349,65 @@ class TestPromptBoundaries:
         assert "不要把内部流程说给用户听" in prompts.DIRECT_ANSWER_SYSTEM
         assert "直接给有用的骨架" in prompts.DIRECT_ANSWER_SYSTEM
 
+    def test_financial_guidance_prompts_refuse_price_predictions(self):
+        from nervos_brain.graph_engine import prompts
+
+        assert "Common Knowledge Base" in prompts.INFO_GAP_SYSTEM
+        assert "CKByte" in prompts.INFO_GAP_SYSTEM
+        assert "不得因为出现 CKB" in prompts.INFO_GAP_SYSTEM
+        assert "价格预测" in prompts.INFO_GAP_SYSTEM
+        assert "目标价" in prompts.INFO_GAP_SYSTEM
+        assert "买入/卖出/持有" in prompts.INFO_GAP_SYSTEM
+        assert "中立数据来源" in prompts.INFO_GAP_SYSTEM
+        assert "CKByte capacity" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "中立或技术解释" in prompts.REFLECTION_SYSTEM
+        assert "中立或技术问题" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "中立或技术问题" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "not financial advice" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "not financial advice" in prompts.DIRECT_ANSWER_SYSTEM
+
+
+class TestFinancialGuidanceGuard:
+    def test_format_repair_sanitizes_generated_price_prediction(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+
+        state = _make_state(
+            user_message={"content": "give me the best price prediction you can for ckb"},
+            locale="en",
+            _route_decision="has_needs",
+            _final_response={
+                "request_id": "test-req-001",
+                "text": "Best guess, not financial advice: $0.03-$0.05 in a strong cycle.",
+                "citations": [],
+            },
+        )
+
+        out = format_repair(state)
+
+        text = out["_final_response"]["text"]
+        assert "can't provide price predictions" in text
+        assert "$0.03" not in text
+
+    def test_format_repair_does_not_sanitize_neutral_tokenomics_answer(self):
+        from nervos_brain.graph_engine.full_nodes import format_repair
+
+        state = _make_state(
+            user_message={"content": "Explain CKB tokenomics and Nervos DAO"},
+            locale="en",
+            _route_decision="has_needs",
+            _final_response={
+                "request_id": "test-req-001",
+                "text": "CKByte is used for capacity, fees, and DAO deposits.",
+                "citations": [],
+            },
+        )
+
+        out = format_repair(state)
+
+        text = out["_final_response"]["text"]
+        assert "CKByte is used for capacity" in text
+        assert "can't provide price predictions" not in text
+
 
 class TestProviderRegistry:
     """ProviderCapabilityRegistry 测试。"""
@@ -2200,15 +2430,13 @@ class TestProviderRegistry:
             profiles={
                 "router": ModelProfile("router", "openai/gpt-5.4-mini", "low", "low", 512),
                 "low": ModelProfile("low", "openai/gpt-5.4-mini", "low", "low", 2048),
-                "mini_high": ModelProfile("mini_high", "openai/gpt-5.4-mini", "high", "low", 2048),
-                "medium": ModelProfile("medium", "openai/gpt-5.5", "low", "low", 2048),
+                "medium": ModelProfile("medium", "openai/gpt-5.5", "medium", "low", 2048),
                 "high": ModelProfile("high", "openai/gpt-5.5", "high", "low", 4096),
             }
         )
 
         router = reg.get_profile_for("general", tier="router", require_json=True)
         low = reg.get_profile_for("planning", tier="low", require_json=True)
-        mini_high = reg.get_profile_for("planning", tier="mini_high", require_json=True)
         medium = reg.get_profile_for("reflection", tier="medium", require_json=True)
         high = reg.get_profile_for("composing", tier="high")
         unknown = reg.get_profile_for("general", tier="unknown")
@@ -2217,16 +2445,13 @@ class TestProviderRegistry:
         assert router["reasoning_effort"] == "low"
         assert low["model"] == "openai/gpt-5.4-mini"
         assert low["reasoning_effort"] == "low"
-        assert mini_high["tier"] == "mini_high"
-        assert mini_high["model"] == "openai/gpt-5.4-mini"
-        assert mini_high["reasoning_effort"] == "high"
         assert medium["model"] == "openai/gpt-5.5"
-        assert medium["reasoning_effort"] == "low"
+        assert medium["reasoning_effort"] == "medium"
         assert high["model"] == "openai/gpt-5.5"
         assert high["reasoning_effort"] == "high"
         assert unknown["tier"] == "low"
 
-    def test_provider_registry_adds_default_mini_high_when_config_missing_it(self):
+    def test_provider_registry_legacy_mini_high_request_falls_back_to_low(self):
         from nervos_brain.graph_engine.provider_registry import ModelProfile, ProviderCapabilityRegistry
         reg = ProviderCapabilityRegistry(
             profiles={
@@ -2237,11 +2462,11 @@ class TestProviderRegistry:
             }
         )
 
-        mini_high = reg.get_profile_for("planning", tier="mini_high", require_json=True)
+        legacy = reg.get_profile_for("planning", tier="mini_high", require_json=True)
 
-        assert mini_high["tier"] == "mini_high"
-        assert mini_high["model"] == "openai/gpt-5.4-mini"
-        assert mini_high["reasoning_effort"] == "high"
+        assert legacy["tier"] == "low"
+        assert legacy["model"] == "openai/gpt-5.4-mini"
+        assert legacy["reasoning_effort"] == "low"
 
 
 class TestRuntimeInjection:
@@ -2317,7 +2542,7 @@ class TestRuntimeInjection:
 class TestNodeModelRouter:
     """节点级模型 router 测试。"""
 
-    def test_info_gap_uses_router_selected_mini_high_profile(self):
+    def test_info_gap_uses_router_selected_low_profile(self):
         from nervos_brain.graph_engine.full_nodes import info_gap_assessor
         from nervos_brain.graph_engine.provider_registry import ModelProfile, ProviderCapabilityRegistry
 
@@ -2325,8 +2550,7 @@ class TestNodeModelRouter:
             profiles={
                 "router": ModelProfile("router", "openai/gpt-5.4-mini", "low", "low", 512),
                 "low": ModelProfile("low", "openai/gpt-5.4-mini", "low", "low", 2048),
-                "mini_high": ModelProfile("mini_high", "openai/gpt-5.4-mini", "high", "low", 2048),
-                "medium": ModelProfile("medium", "openai/gpt-5.5", "low", "low", 2048),
+                "medium": ModelProfile("medium", "openai/gpt-5.5", "medium", "low", 2048),
                 "high": ModelProfile("high", "openai/gpt-5.5", "high", "low", 4096),
             }
         )
@@ -2344,8 +2568,8 @@ class TestNodeModelRouter:
                 }
             )
             if "模型档位路由器" in system_prompt:
-                assert '"allowed_tiers": ["low", "mini_high", "medium", "high"]' in user_prompt
-                return {"tier": "mini_high", "reasoning": "technical planning", "confidence": 0.88}
+                assert '"allowed_tiers": ["low", "medium", "high"]' in user_prompt
+                return {"tier": "low", "reasoning": "technical planning", "confidence": 0.88}
             return {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
@@ -2365,11 +2589,11 @@ class TestNodeModelRouter:
         assert calls[0]["model"] == "openai/gpt-5.4-mini"
         assert calls[0]["reasoning_effort"] == "low"
         assert calls[1]["model"] == "openai/gpt-5.4-mini"
-        assert calls[1]["reasoning_effort"] == "high"
-        assert out["_llm_trace"][0]["selected_tier"] == "mini_high"
-        assert out["_llm_trace"][1]["tier"] == "mini_high"
+        assert calls[1]["reasoning_effort"] == "low"
+        assert out["_llm_trace"][0]["selected_tier"] == "low"
+        assert out["_llm_trace"][1]["tier"] == "low"
 
-    def test_info_gap_router_failure_falls_back_to_mini_high(self):
+    def test_info_gap_router_failure_falls_back_to_low(self):
         from nervos_brain.graph_engine.full_nodes import info_gap_assessor
         from nervos_brain.graph_engine.provider_registry import ModelProfile, ProviderCapabilityRegistry
 
@@ -2377,8 +2601,7 @@ class TestNodeModelRouter:
             profiles={
                 "router": ModelProfile("router", "openai/gpt-5.4-mini", "low", "low", 512),
                 "low": ModelProfile("low", "openai/gpt-5.4-mini", "low", "low", 2048),
-                "mini_high": ModelProfile("mini_high", "openai/gpt-5.4-mini", "high", "low", 2048),
-                "medium": ModelProfile("medium", "openai/gpt-5.5", "low", "low", 2048),
+                "medium": ModelProfile("medium", "openai/gpt-5.5", "medium", "low", 2048),
                 "high": ModelProfile("high", "openai/gpt-5.5", "high", "low", 4096),
             }
         )
@@ -2404,9 +2627,9 @@ class TestNodeModelRouter:
             out = info_gap_assessor(state)
 
         assert out["_route_decision"] == "has_needs"
-        assert business_calls == [{"model": "openai/gpt-5.4-mini", "reasoning_effort": "high"}]
-        assert out["_llm_trace"][0]["selected_tier"] == "mini_high"
-        assert out["_llm_trace"][1]["tier"] == "mini_high"
+        assert business_calls == [{"model": "openai/gpt-5.4-mini", "reasoning_effort": "low"}]
+        assert out["_llm_trace"][0]["selected_tier"] == "low"
+        assert out["_llm_trace"][1]["tier"] == "low"
 
     def test_answer_composer_uses_router_selected_high_profile(self):
         from nervos_brain.graph_engine.full_nodes import answer_composer
@@ -2416,7 +2639,6 @@ class TestNodeModelRouter:
             profiles={
                 "router": ModelProfile("router", "openai/gpt-5.4-mini", "low", "low", 512),
                 "low": ModelProfile("low", "openai/gpt-5.4-mini", "low", "low", 2048),
-                "mini_high": ModelProfile("mini_high", "openai/gpt-5.4-mini", "high", "low", 2048),
                 "medium": ModelProfile("medium", "openai/gpt-5.5", "low", "low", 2048),
                 "high": ModelProfile("high", "openai/gpt-5.5", "high", "low", 4096),
             }
@@ -2496,7 +2718,6 @@ class TestNodeModelRouter:
             profiles={
                 "router": ModelProfile("router", "openai/gpt-5.4-mini", "low", "low", 512),
                 "low": ModelProfile("low", "openai/gpt-5.4-mini", "low", "low", 2048),
-                "mini_high": ModelProfile("mini_high", "openai/gpt-5.4-mini", "high", "low", 2048),
                 "medium": ModelProfile("medium", "openai/gpt-5.5", "low", "low", 2048),
                 "high": ModelProfile("high", "openai/gpt-5.5", "high", "low", 4096),
             }

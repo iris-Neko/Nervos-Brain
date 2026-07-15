@@ -37,7 +37,10 @@ def test_fast_mode_store_persists_without_chat_content(tmp_path: Path):
 
 def test_parse_fast_command_variants():
     assert parse_fast_command("/ask") is None
-    assert parse_fast_command("/fast").action == "enable"
+    fast_command = parse_fast_command("/fast")
+    assert fast_command.action == "enable"
+    assert "更快" in fast_command.message
+    assert "faster" in fast_command.message
     assert parse_fast_command("/fast@NBCKB_Bot").action == "enable"
     assert parse_fast_command("/fast", "off").action == "disable"
     assert parse_fast_command("/fast", "取消").action == "disable"
@@ -47,4 +50,6 @@ def test_parse_fast_command_variants():
 
 def test_fast_status_message():
     assert "已待命" in fast_status_message(pending=True)
+    assert "更快" in fast_status_message(pending=True)
     assert "未开启" in fast_status_message(pending=False)
+    assert "faster" in fast_status_message(pending=False)

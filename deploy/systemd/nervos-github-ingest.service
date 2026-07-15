@@ -6,7 +6,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 Environment=PROJECT_ROOT=%h/path/to/Nervos-Brain
-Environment=MAMBA_BIN=%h/miniforge3/bin/mamba
-Environment=MAMBA_ENV=nervos-brain
+Environment=ENV_RUNNER_BIN=%h/miniconda3/bin/conda
+Environment=ENV_NAME=nervos-brain
 EnvironmentFile=-%h/.config/nervos-brain/github-ingest.env
-ExecStart=/bin/bash -lc 'cd "$PROJECT_ROOT" && "$MAMBA_BIN" run -n "$MAMBA_ENV" python scripts/run_github_docs_ingest.py --incremental && "$MAMBA_BIN" run -n "$MAMBA_ENV" python scripts/run_github_code_ingest.py --incremental'
+ExecStart=/bin/bash -lc 'cd "$PROJECT_ROOT" && "$ENV_RUNNER_BIN" run -n "$ENV_NAME" python scripts/run_github_docs_ingest.py --incremental && "$ENV_RUNNER_BIN" run -n "$ENV_NAME" python scripts/run_github_code_ingest.py --incremental'

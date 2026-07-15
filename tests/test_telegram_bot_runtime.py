@@ -39,6 +39,7 @@ def _sample_update(
     *,
     update_id: int = 100,
     chat_id: int = -100123,
+    thread_id: int | None = None,
     user_id: int = 42,
     text: str = "hello",
     is_bot: bool = False,
@@ -53,6 +54,8 @@ def _sample_update(
         "chat": {"id": chat_id, "type": chat_type},
         "from": {"id": user_id, "is_bot": is_bot},
     }
+    if thread_id is not None:
+        message["message_thread_id"] = thread_id
     if reply_to_bot:
         message["reply_to_message"] = {
             "message_id": 99,
@@ -79,6 +82,7 @@ class _FakeAPI:
     def __init__(self, updates: list[dict[str, Any]] | None = None) -> None:
         self._updates = list(updates or [])
         self.sent_requests: list[dict[str, Any]] = []
+        self.last_send_results: list[dict[str, Any]] = []
         self.callback_requests: list[dict[str, Any]] = []
         self.chat_actions: list[dict[str, Any]] = []
         self.files: dict[str, tuple[str, bytes]] = {}
@@ -96,6 +100,15 @@ class _FakeAPI:
 
     def send_requests(self, requests_payloads: list[dict[str, Any]]) -> int:
         self.sent_requests.extend(requests_payloads)
+        self.last_send_results = [
+            {
+                "method": str(req.get("method", "sendMessage")),
+                "message_id": str(9000 + idx),
+                "chat_id": str(req.get("payload", {}).get("chat_id", "")),
+            }
+            for idx, req in enumerate(requests_payloads)
+            if isinstance(req, dict)
+        ]
         return len(requests_payloads)
 
     def send_request(
@@ -178,22 +191,26 @@ def _sample_callback_update(
     *,
     update_id: int = 200,
     chat_id: int = -100123,
+    thread_id: int | None = None,
     user_id: int = 42,
     request_id: str = "tg-req-1",
     score: int = 2,
     data: str | None = None,
 ) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "message_id": 5,
+        "date": 1711111112,
+        "text": "bot answer preview",
+        "chat": {"id": chat_id, "type": "supergroup"},
+    }
+    if thread_id is not None:
+        message["message_thread_id"] = thread_id
     return {
         "update_id": update_id,
         "callback_query": {
             "id": "cb-1",
             "from": {"id": user_id, "is_bot": False},
-            "message": {
-                "message_id": 5,
-                "date": 1711111112,
-                "text": "bot answer preview",
-                "chat": {"id": chat_id, "type": "supergroup"},
-            },
+            "message": message,
             "data": data if data is not None else f"csat:{request_id}:{score}",
         },
     }
@@ -469,6 +486,36 @@ def test_group_mention_processes_and_strips_mention():
     assert row["ignored"] is False
     assert captured["user_message"]["content"] == "ckb是什么"
     assert fake_api.chat_actions == [{"chat_id": "-100123", "action": "typing"}]
+    assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
+
+
+def test_group_text_mention_entity_processes_message():
+    fake_api = _FakeAPI()
+    captured: dict[str, Any] = {}
+
+    def runner(state: dict[str, Any]) -> dict[str, Any]:
+        captured.update(state)
+        return {"_final_response": {"request_id": state["request_id"], "text": "ok"}}
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=runner,
+        bot_username="NBCKB_Bot",
+    )
+    update = _sample_update(text="@NBCKB_Bot ckb是什么")
+    update["message"]["entities"] = [
+        {
+            "offset": 0,
+            "length": 10,
+            "type": "text_mention",
+            "user": {"id": 999, "is_bot": True, "username": "NBCKB_Bot"},
+        }
+    ]
+
+    row = gateway.process_update(update, dry_run=False)
+
+    assert row["ignored"] is False
+    assert captured["user_message"]["content"] == "ckb是什么"
     assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
 
 
@@ -859,6 +906,8 @@ def test_process_update_writes_debug_event(tmp_path: Path):
     assert event["citation_count"] == 1
     assert event["outbound_reply_to_message_id"] == "1"
     assert event["first_send_reply_to_message_id"] == "1"
+    assert event["sent_message_ids"] == ["9000"]
+    assert event["send_results"][0]["message_id"] == "9000"
     assert isinstance(event["graph_elapsed_ms"], int)
     assert event["graph_elapsed_ms"] >= 0
     assert event["node_timings"] == [{"node": "info_gap_assessor", "elapsed_ms": 100}]
@@ -980,6 +1029,7 @@ def test_fast_command_sets_one_shot_priority_for_next_telegram_request(tmp_path:
     assert command_row["reason"] == "fast_command"
     assert command_row["fast_action"] == "enable"
     assert "已开启 fast 模式" in fake_api.sent_requests[0]["payload"]["text"]
+    assert "更快" in fake_api.sent_requests[0]["payload"]["text"]
     assert first_row["ignored"] is False
     assert second_row["ignored"] is False
     assert len(captured) == 2
@@ -1087,6 +1137,85 @@ def test_allowed_chat_ids_filter():
     row = gateway.process_update(_sample_update(chat_id=-100123, text="@NBCKB_Bot hello"), dry_run=True)
     assert row["ignored"] is True
     assert row["reason"] == "chat_not_allowed"
+
+
+def test_allowed_thread_ids_filter_blocks_unlisted_topic():
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {"_final_response": {"request_id": state["request_id"], "text": "ok"}},
+        allowed_chat_ids={"-100123"},
+        allowed_thread_ids={"224514", "295370"},
+    )
+
+    row = gateway.process_update(
+        _sample_update(chat_id=-100123, thread_id=1, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+
+    assert row["ignored"] is True
+    assert row["reason"] == "thread_not_allowed"
+    assert row["thread_id"] == "1"
+    assert calls == []
+
+
+def test_allowed_thread_ids_filter_allows_configured_topics():
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {"_final_response": {"request_id": state["request_id"], "text": "ok"}},
+        allowed_chat_ids={"-100123"},
+        allowed_thread_ids={"224514", "295370"},
+    )
+
+    dev_row = gateway.process_update(
+        _sample_update(chat_id=-100123, thread_id=224514, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+    marketing_row = gateway.process_update(
+        _sample_update(update_id=101, chat_id=-100123, thread_id=295370, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+
+    assert dev_row["ignored"] is False
+    assert marketing_row["ignored"] is False
+    assert len(calls) == 2
+    assert calls[0]["user_message"]["context"]["thread_id"] == "224514"
+    assert calls[1]["user_message"]["context"]["thread_id"] == "295370"
+
+
+def test_allowed_thread_ids_by_chat_only_restricts_configured_chat():
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {"_final_response": {"request_id": state["request_id"], "text": "ok"}},
+        allowed_chat_ids={"-100123", "-100999"},
+        allowed_thread_ids_by_chat={"-100123": {"224514", "295370"}},
+    )
+
+    blocked_row = gateway.process_update(
+        _sample_update(chat_id=-100123, thread_id=1, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+    allowed_row = gateway.process_update(
+        _sample_update(update_id=101, chat_id=-100999, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+    topic_row = gateway.process_update(
+        _sample_update(update_id=102, chat_id=-100123, thread_id=224514, text="@NBCKB_Bot hello"),
+        dry_run=True,
+    )
+
+    assert blocked_row["ignored"] is True
+    assert blocked_row["reason"] == "thread_not_allowed"
+    assert allowed_row["ignored"] is False
+    assert topic_row["ignored"] is False
+    assert len(calls) == 2
+    assert calls[0]["user_message"]["context"]["channel_id"] == "-100999"
+    assert calls[1]["user_message"]["context"]["thread_id"] == "224514"
 
 
 def test_poll_once_advances_and_persists_offset(tmp_path: Path):
@@ -1392,10 +1521,10 @@ def test_build_runtime_defaults_to_dynamic_provider_registry(monkeypatch, tmp_pa
 
     assert isinstance(runtime.provider_registry, ProviderCapabilityRegistry)
     assert runtime.provider_registry.get_profile_for("general", tier="router")["tier"] == "router"
-    mini_high = runtime.provider_registry.get_profile_for("planning", tier="mini_high")
-    assert mini_high["tier"] == "mini_high"
-    assert mini_high["model"] == "openai/gpt-5.4-mini"
-    assert mini_high["reasoning_effort"] == "high"
+    low = runtime.provider_registry.get_profile_for("planning", tier="low")
+    assert low["tier"] == "low"
+    assert low["model"] == "openai/gpt-5.6-luna"
+    assert low["reasoning_effort"] == "low"
     assert memory_service is not None
 
 
@@ -1412,7 +1541,7 @@ def test_build_runtime_model_argument_forces_fixed_registry(monkeypatch, tmp_pat
         memory_db=tmp_path / "memory.db",
     )
 
-    profile = runtime.provider_registry.get_profile_for("composing", tier="mini_high")
+    profile = runtime.provider_registry.get_profile_for("composing", tier="low")
     assert profile["model"] == "openai/gpt-5.5"
     assert profile["reasoning_effort"] == ""
 
@@ -1433,6 +1562,57 @@ def test_process_callback_query_allowed_chat_filter_blocks_non_test_group(tmp_pa
     assert row["reason"] == "chat_not_allowed"
     assert store.iter_records() == []
     assert fake_api.callback_requests == []
+
+
+def test_process_callback_query_allowed_thread_filter_blocks_unlisted_topic(tmp_path: Path):
+    fake_api = _FakeAPI()
+    store = FeedbackJsonlStore(tmp_path / "feedback.jsonl")
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {},
+        allowed_chat_ids={"-100123"},
+        allowed_thread_ids={"224514", "295370"},
+        feedback_store=store,
+    )
+
+    row = gateway.process_update(
+        _sample_callback_update(chat_id=-100123, thread_id=1),
+        dry_run=False,
+    )
+
+    assert row["ignored"] is True
+    assert row["reason"] == "thread_not_allowed"
+    assert row["thread_id"] == "1"
+    assert store.iter_records() == []
+    assert fake_api.callback_requests == []
+
+
+def test_process_callback_query_allowed_thread_by_chat_allows_unconfigured_chat(tmp_path: Path):
+    fake_api = _FakeAPI()
+    store = FeedbackJsonlStore(tmp_path / "feedback.jsonl")
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {},
+        allowed_chat_ids={"-100123", "-100999"},
+        allowed_thread_ids_by_chat={"-100123": {"224514", "295370"}},
+        feedback_store=store,
+    )
+
+    blocked_row = gateway.process_update(
+        _sample_callback_update(chat_id=-100123, thread_id=1),
+        dry_run=False,
+    )
+    allowed_row = gateway.process_update(
+        _sample_callback_update(update_id=201, chat_id=-100999),
+        dry_run=False,
+    )
+
+    assert blocked_row["ignored"] is True
+    assert blocked_row["reason"] == "thread_not_allowed"
+    assert allowed_row["ignored"] is False
+    assert allowed_row["reason"] == "csat"
+    assert len(store.iter_records()) == 1
+    assert len(fake_api.callback_requests) == 1
 
 
 def test_process_callback_query_dry_run_does_not_write_feedback(tmp_path: Path):

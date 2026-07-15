@@ -17,7 +17,7 @@ TaskType = Literal[
     "self_check",
     "general",
 ]
-ProfileTier = Literal["router", "low", "mini_high", "medium", "high"]
+ProfileTier = Literal["router", "low", "medium", "high"]
 ModelCostTier = Literal["low", "medium", "high"]
 
 
@@ -75,35 +75,28 @@ _DEFAULT_REGISTRY: list[ModelCapability] = [
 _DEFAULT_PROFILES: dict[str, ModelProfile] = {
     "router": ModelProfile(
         tier="router",
-        model="openai/gpt-5.4-mini",
+        model="openai/gpt-5.6-luna",
         reasoning_effort="low",
         verbosity="low",
         max_tokens=512,
     ),
     "low": ModelProfile(
         tier="low",
-        model="openai/gpt-5.4-mini",
+        model="openai/gpt-5.6-luna",
         reasoning_effort="low",
-        verbosity="low",
-        max_tokens=2048,
-    ),
-    "mini_high": ModelProfile(
-        tier="mini_high",
-        model="openai/gpt-5.4-mini",
-        reasoning_effort="high",
         verbosity="low",
         max_tokens=2048,
     ),
     "medium": ModelProfile(
         tier="medium",
-        model="openai/gpt-5.5",
-        reasoning_effort="low",
+        model="openai/gpt-5.6-luna",
+        reasoning_effort="medium",
         verbosity="low",
         max_tokens=2048,
     ),
     "high": ModelProfile(
         tier="high",
-        model="openai/gpt-5.5",
+        model="openai/gpt-5.6-luna",
         reasoning_effort="high",
         verbosity="low",
         max_tokens=4096,
@@ -117,7 +110,7 @@ def _load_profiles_from_config() -> dict[str, ModelProfile]:
         return dict(_DEFAULT_PROFILES)
 
     profiles = dict(_DEFAULT_PROFILES)
-    for tier in ("router", "low", "mini_high", "medium", "high"):
+    for tier in ("router", "low", "medium", "high"):
         section = raw.get(tier, {})
         if not isinstance(section, dict):
             continue

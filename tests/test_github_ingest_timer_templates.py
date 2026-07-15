@@ -18,6 +18,8 @@ def test_github_ingest_service_uses_incremental_without_restart():
 
     assert "run_github_docs_ingest.py --incremental" in service
     assert "run_github_code_ingest.py --incremental" in service
+    assert "ENV_RUNNER_BIN" in service
+    assert "ENV_NAME=nervos-brain" in service
     assert "EnvironmentFile=-%h/.config/nervos-brain/github-ingest.env" in service
     assert "restart_telegram_bot.sh" not in service
     assert "run_discord_bot.py" not in service

@@ -187,13 +187,43 @@ def _print_update_result(row: dict) -> None:
     logger.info("[ok] update_id=%s chat_id=%s request_id=%s sent=%d", uid, chat_id, rid, sent)
 
 
-def _parse_allowed_chat_ids(values: list[str]) -> set[str]:
+def _str_list_from_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]
+
+
+def _parse_id_set(values: list[str]) -> set[str]:
     allowed: set[str] = set()
     for raw in values:
         for part in raw.split(","):
             value = part.strip()
             if value:
                 allowed.add(value)
+    return allowed
+
+
+def _parse_allowed_chat_ids(values: list[str]) -> set[str]:
+    return _parse_id_set(values)
+
+
+def _parse_allowed_thread_ids(values: list[str]) -> set[str]:
+    return _parse_id_set(values)
+
+
+def _parse_allowed_thread_ids_by_chat(value: Any) -> dict[str, set[str]]:
+    if not isinstance(value, dict):
+        return {}
+    allowed: dict[str, set[str]] = {}
+    for raw_chat_id, raw_thread_ids in value.items():
+        chat_id = str(raw_chat_id).strip()
+        if not chat_id:
+            continue
+        thread_ids = _parse_allowed_thread_ids(_str_list_from_value(raw_thread_ids))
+        if thread_ids:
+            allowed[chat_id] = thread_ids
     return allowed
 
 
@@ -254,6 +284,12 @@ def main() -> int:
         action="append",
         default=_cfg_str_list(bot_cfg, "allowed_chat_ids"),
         help="Allow only these chat IDs (repeatable, comma supported).",
+    )
+    parser.add_argument(
+        "--allowed-thread-id",
+        action="append",
+        default=_cfg_str_list(bot_cfg, "allowed_thread_ids"),
+        help="Allow only these Telegram topic/thread IDs inside allowed chats (repeatable, comma supported).",
     )
     parser.add_argument(
         "--render-mode",
@@ -379,6 +415,10 @@ def main() -> int:
 
     offset_store = TelegramUpdateOffsetStore(resolve_project_path(args.offset_file))
     allowed_chat_ids = _parse_allowed_chat_ids(args.allowed_chat_id)
+    allowed_thread_ids = _parse_allowed_thread_ids(args.allowed_thread_id)
+    allowed_thread_ids_by_chat = _parse_allowed_thread_ids_by_chat(
+        bot_cfg.get("allowed_thread_ids_by_chat", {})
+    )
     feedback_file = resolve_project_path(args.feedback_file)
     debug_log_file = resolve_project_path(args.debug_log_file) if str(args.debug_log_file).strip() else None
     fast_mode_state_file = resolve_project_path(args.fast_mode_state_file)
@@ -393,6 +433,8 @@ def main() -> int:
         render_mode=args.render_mode,
         append_csat=args.append_csat,
         allowed_chat_ids=allowed_chat_ids,
+        allowed_thread_ids=allowed_thread_ids,
+        allowed_thread_ids_by_chat=allowed_thread_ids_by_chat,
         feedback_store=FeedbackJsonlStore(feedback_file),
         debug_log_file=debug_log_file,
         memory_service=memory_service,
@@ -408,8 +450,14 @@ def main() -> int:
         max_worker_threads=max(1, int(args.max_worker_threads)),
     )
     logger.info(
-        "Telegram beta controls: allowed_chat_ids=%s append_csat=%s mention_only_in_group=%s respond_to_bot_replies=%s feedback_file=%s debug_log_file=%s",
+        "Telegram beta controls: allowed_chat_ids=%s allowed_thread_ids=%s allowed_thread_ids_by_chat=%s append_csat=%s mention_only_in_group=%s respond_to_bot_replies=%s feedback_file=%s debug_log_file=%s",
         sorted(allowed_chat_ids) if allowed_chat_ids else "ALL",
+        sorted(allowed_thread_ids) if allowed_thread_ids else "ALL",
+        {
+            chat_id: sorted(thread_ids)
+            for chat_id, thread_ids in sorted(allowed_thread_ids_by_chat.items())
+        }
+        or "ALL",
         bool(args.append_csat),
         bool(args.mention_only_in_group),
         bool(args.respond_to_bot_replies),

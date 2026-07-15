@@ -201,10 +201,10 @@ def test_build_runtime_defaults_to_dynamic_provider_registry(monkeypatch, tmp_pa
     assert memory_service is not None
     assert isinstance(runtime.provider_registry, ProviderCapabilityRegistry)
     assert runtime.provider_registry.get_profile_for("general", tier="router")["tier"] == "router"
-    mini_high = runtime.provider_registry.get_profile_for("planning", tier="mini_high")
-    assert mini_high["tier"] == "mini_high"
-    assert mini_high["model"] == "openai/gpt-5.4-mini"
-    assert mini_high["reasoning_effort"] == "high"
+    low = runtime.provider_registry.get_profile_for("planning", tier="low")
+    assert low["tier"] == "low"
+    assert low["model"] == "openai/gpt-5.6-luna"
+    assert low["reasoning_effort"] == "low"
 
 
 def test_build_runtime_model_argument_forces_fixed_registry(monkeypatch, tmp_path):
@@ -218,7 +218,7 @@ def test_build_runtime_model_argument_forces_fixed_registry(monkeypatch, tmp_pat
     runtime, memory_service = runner._build_runtime(model="openai/gpt-5.5", memory_db=tmp_path / "memory.db")
 
     assert memory_service is not None
-    profile = runtime.provider_registry.get_profile_for("reflection", tier="mini_high")
+    profile = runtime.provider_registry.get_profile_for("reflection", tier="low")
     assert profile["model"] == "openai/gpt-5.5"
     assert profile["reasoning_effort"] == ""
 
@@ -513,6 +513,7 @@ def test_fast_command_sets_one_shot_priority_for_next_discord_request(tmp_path: 
     assert command_row["reason"] == "fast_command"
     assert command_row["fast_action"] == "enable"
     assert "已开启 fast 模式" in command_row["send_requests"][0]["payload"]["content"]
+    assert "更快" in command_row["send_requests"][0]["payload"]["content"]
     assert first_row["ignored"] is False
     assert second_row["ignored"] is False
     assert len(captured) == 2

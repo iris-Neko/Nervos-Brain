@@ -32,7 +32,55 @@ from .source_registry import (
 
 _ANSWER_COMPOSER_FALLBACK_TEXT = "证据已收集，但回答生成暂时失败，请稍后重试。"
 _DIRECT_ANSWER_FALLBACK_TEXT = "我可以直接回答低风险问题，但这次生成暂时失败了，请稍后重试。"
+_FINANCIAL_GUIDANCE_REFUSAL_TEXT = (
+    "I can't provide price predictions, target prices, or buy/sell guidance. "
+    "I can help explain fundamentals, tokenomics, technical risks, or where to find neutral market data."
+)
 _RETRIEVAL_POLICIES = {"none", "single", "deep"}
+_MARKET_PREDICTION_INTENT_RE = re.compile(
+    r"(?i)("
+    r"price\s*(?:prediction|forecast|target)|"
+    r"(?:predict|forecast).{0,40}(?:price|market|value)|"
+    r"(?:price|market|value).{0,40}(?:predict|forecast)|"
+    r"target\s*price|best\s*price|"
+    r"bull\s*cycle\s*target|bear\s*market\s*(?:bottom|target)|"
+    r"(?:moon|moonshot)\s*(?:price|target)|"
+    r"(?:price|target).{0,20}(?:moon|moonshot)|"
+    r"\b[A-Z]{2,12}\b\s+(?:to|reach|hit)\s*(?:\$|usd|usdt)\s*\d|"
+    r"(?:can|will|could)\s+\b[A-Z]{2,12}\b\s+(?:reach|hit)\s*(?:\$|usd|usdt)\s*\d|"
+    r"价格预测|预测价格|目标价|指导价|走势预测|牛市目标|熊市底|涨到多少|跌到多少|"
+    r"涨到\s*(?:\$|usd|usdt|美元)?\s*\d|跌到\s*(?:\$|usd|usdt|美元)?\s*\d|"
+    r"会涨到|会跌到"
+    r")"
+)
+_TRADING_DECISION_INTENT_RE = re.compile(
+    r"(?i)("
+    r"should\s+(?:i|we)\s+(?:buy|sell|hold)\b|"
+    r"is\s+(?:now|today)\s+(?:a\s+)?good\s+time\s+to\s+(?:buy|sell)|"
+    r"(?:buy|sell)\s+or\s+(?:buy|sell)|"
+    r"(?:now|today).{0,30}\b(?:buy|sell|hold|entry|exit)\b|"
+    r"\b(?:buy|sell|hold|entry|exit)\b.{0,30}(?:now|today)|"
+    r"take\s*profit|stop\s*loss|"
+    r"investment\s*advice|financial\s*advice|"
+    r"该不该(?:买|卖|持有)|要不要(?:买|卖|持有)|现在.{0,12}(?:买入|卖出|持有|建仓|加仓|减仓)|"
+    r"买入吗|卖出吗|持有吗|建仓吗|加仓吗|减仓吗|止盈|止损|投资建议|金融建议"
+    r")"
+)
+_MARKET_TIMING_CONTEXT_RE = re.compile(
+    r"(?i)(?:\bnow\b|\btoday\b|good\s+time|entry|exit|portfolio|investment|financial|现在|今天|入场|出场|仓位|投资|金融)"
+)
+_PRICE_RANGE_RE = re.compile(
+    r"(?i)(?:\$|usd|usdt|美元)\s*\d+(?:\.\d+)?\s*(?:[-–—~至到]\s*(?:\$|usd|usdt|美元)?\s*\d+(?:\.\d+)?)?"
+)
+_TECHNICAL_CKB_CONTEXT_RE = re.compile(
+    r"(?i)("
+    r"\bcell\b|\bcapacity\b|\bckbyte\b|common\s+knowledge\s+(?:base|byte)|"
+    r"ckb[-\s]?vm|lock\s+script|type\s+script|\btransaction\b|\bfee\b|\bcycles?\b|"
+    r"dao\s+(?:deposit|withdraw)|\bxudt\b|\bspore\b|rgb\+\+|\bsdk\b|\bapi\b|\brpc\b|"
+    r"\bnode\b|\bminer\b|"
+    r"容量|存储|交易|手续费|脚本|节点|矿工|质押|存入|提取"
+    r")"
+)
 
 
 def _normalize_info_needs_schema(info_needs: Any) -> list[dict]:
@@ -52,40 +100,100 @@ def _normalize_info_needs_schema(info_needs: Any) -> list[dict]:
     return sanitized
 
 
+def _is_financial_guidance_request(text: str) -> bool:
+    """Detect explicit price-prediction or trading-decision requests."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return False
+    if _MARKET_PREDICTION_INTENT_RE.search(normalized):
+        return True
+    if not _TRADING_DECISION_INTENT_RE.search(normalized):
+        return False
+    if _TECHNICAL_CKB_CONTEXT_RE.search(normalized) and not _MARKET_TIMING_CONTEXT_RE.search(normalized):
+        return False
+    if _TRADING_DECISION_INTENT_RE.search(normalized):
+        return True
+    return False
+
+
+def _financial_guidance_refusal_text(locale: str | None = None) -> str:
+    lang = str(locale or "").lower()
+    if lang.startswith("zh"):
+        return "我不能提供价格预测、目标价或买卖指导。可以帮你解释项目基本面、代币经济模型、技术风险，或告诉你去哪里查看中立市场数据。"
+    return _FINANCIAL_GUIDANCE_REFUSAL_TEXT
+
+
+def _force_financial_guidance_refusal(state: dict, *, question: str | None = None) -> dict[str, Any]:
+    request_id = str(state.get("request_id", "unknown"))
+    response = {
+        "request_id": request_id,
+        "text": _financial_guidance_refusal_text(str(state.get("locale", "zh-CN"))),
+        "citations": [],
+        "answer_mode": "policy_refusal",
+    }
+    return {
+        "_route_decision": "answer_direct",
+        "retrieval_policy": "none",
+        "info_needs": [],
+        "resolved_question": str(question if question is not None else _effective_question(state)),
+        "budget": _merge_policy_budget(state, "none"),
+        "_final_response": response,
+        "_direct_answer": True,
+        "_financial_guidance_refusal": True,
+    }
+
+
+def _sanitize_financial_guidance_response(state: dict, response: dict[str, Any]) -> bool:
+    """Replace any generated price/trading guidance with a refusal."""
+    question = _effective_question(state)
+    text = str(response.get("text", "") or "")
+    if not _is_financial_guidance_request(question):
+        return False
+    if not (
+        _PRICE_RANGE_RE.search(text)
+        or _MARKET_PREDICTION_INTENT_RE.search(text)
+        or _TRADING_DECISION_INTENT_RE.search(text)
+    ):
+        return False
+    response["text"] = _financial_guidance_refusal_text(str(state.get("locale", "zh-CN")))
+    response["citations"] = []
+    response["answer_mode"] = "policy_refusal"
+    return True
+
+
 logger = logging.getLogger(__name__)
 
-_MODEL_TIERS = {"low", "mini_high", "medium", "high"}
+_MODEL_TIERS = {"low", "medium", "high"}
 _NODE_FALLBACK_TIERS = {
-    "info_gap_assessor": "mini_high",
-    "retriever_planner": "mini_high",
-    "reflection_pre": "mini_high",
+    "info_gap_assessor": "low",
+    "retriever_planner": "low",
+    "reflection_pre": "low",
     "reflection_post": "medium",
     "direct_answer": "low",
     "answer_composer": "medium",
 }
 _LLM_ROUTER_SYSTEM = """你是 Nervos Brain 的模型档位路由器。
-你的唯一任务是为当前 graph 节点选择 low、mini_high、medium、high 四档之一。
+你的唯一任务是为当前 graph 节点选择 low、medium、high 三档之一。
 只根据任务复杂度、风险和节点目标判断模型档位；不要改变 graph 路由、检索策略或回答内容。
 
 档位含义：
 - low: 只用于低风险、局部、可轻易判断的任务，例如闲聊、很短的直接回答、简单格式/JSON 分类、没有证据依赖的低成本节点。
-- mini_high: 低成本深思考档。用于技术分类、检索规划、info_gap 判断、轻量反思、引用初筛、公开资料缺口/版本差异判断。
 - medium: 默认强技术档。用于普通技术问答、最终回答生成、需要稳定综合但还不到深推理的节点。
 - high: 深推理档。用于源码/架构/协议实现问题、复杂代码生成、跨仓库/多后端证据综合、引用一致性高风险、证据与草稿明显不一致、排障/错误日志、安全/资金/私钥相关决策。
 
 选择约束：
 - 不要过度省模型，也不要过度升档。模型档位应服务于“本节点需要做多少判断”，而不是因为主题是技术类就自动升高。
-- 简单追问、资料入口推荐、已有证据充足后的判断、低风险格式/JSON 分类，优先 low 或 mini_high；不要默认升 medium/high。
-- info_gap_assessor / retriever_planner 遇到真实项目、API、仓库、版本、检索策略、多库选择、是否需要证据的问题，通常选 mini_high；只有跨来源冲突、复杂源码/架构、安全/资金风险时才升级到 medium/high。
-- reflection_pre 若已有证据足够覆盖核心问题，通常选 mini_high 并推动 accept_answer；不要为了“更完整”选择高档位继续多轮反思。
+- 简单追问、资料入口推荐、已有证据充足后的判断、低风险格式/JSON 分类，优先 low；不要默认升 medium/high。
+- info_gap_assessor / retriever_planner 默认使用 low；只有跨来源冲突、复杂源码/架构、安全/资金风险时才升级到 medium/high。
+- reflection_pre 默认使用 low 并推动 accept_answer；不要为了“更完整”选择高档位继续多轮反思。
 - reflection_post 直接影响最终质量，通常选 medium；只有明显引用错配、草稿是否把 A 项目证据泛化到 B 项目、无证据硬编或严重偏题时才选 high。
 - answer_composer 的默认档位是 medium；只有复杂代码生成、源码/协议深推理、跨多证据综合或安全/资金敏感方案才选 high。普通资料推荐、学习路线、覆盖情况说明应避免 high。
-- direct_answer 只有在闲聊、帮助说明、简单概念解释时选 low；如果用户要求真实项目细节、具体实现、代码、API 或高风险建议，至少 mini_high。
+- direct_answer 只有在闲聊、帮助说明、简单概念解释时选 low；如果用户要求真实项目细节、具体实现、代码、API 或高风险建议，至少 medium。
 - 如果 time_budget 已接近或超过目标耗时，应主动选择更快档位，优先给基于已有信息的简洁结论；不要继续高推理换取边际质量。
 - high 可以使用，但它是例外档，不是技术问题默认档；不要用于纯格式修复、短闲聊、资料列表、已有证据充分的简单综合。
 
 必须只输出 JSON：
-{"tier":"low|mini_high|medium|high","reasoning":"一句话说明","confidence":0.0}
+{"tier":"low|medium|high","reasoning":"一句话说明","confidence":0.0}
 """
 
 
@@ -566,7 +674,7 @@ def _coerce_profile(raw: Any, *, fallback_tier: str = "low") -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     tier = str(raw.get("tier", fallback_tier) or fallback_tier).strip().lower()
-    allowed_tiers = {"router", "low", "mini_high", "medium", "high"}
+    allowed_tiers = {"router", "low", "medium", "high"}
     if tier not in allowed_tiers:
         tier = fallback_tier if fallback_tier in allowed_tiers else "low"
     return {
@@ -720,7 +828,7 @@ def _select_model_profile(
         "flags": _router_context_flags(state, node_name=node_name),
         "time_budget": _time_budget_snapshot(state),
         "fallback_tier": fallback,
-        "allowed_tiers": ["low", "mini_high", "medium", "high"],
+        "allowed_tiers": ["low", "medium", "high"],
     }
 
     tier = fallback
@@ -1255,6 +1363,13 @@ def info_gap_assessor(state: dict) -> dict:
     recent_messages = _load_recent_messages(state)
     conversation_context = _conversation_context_from_state(state)
 
+    if _is_financial_guidance_request(question):
+        update = _force_financial_guidance_refusal(state, question=question)
+        update["memory_facts"] = facts
+        update["recent_messages"] = recent_messages
+        update["conversation_context"] = conversation_context
+        logger.info("info_gap_assessor blocked financial guidance request")
+        return update
 
     user_prompt = prompts.INFO_GAP_USER.format(
         question=question,
@@ -2312,6 +2427,15 @@ def doc_grader(state: dict) -> dict:
 
 def answer_composer(state: dict) -> dict:
     """调 LLM 基于 evidence 组装带引用的回答。"""
+    if state.get("_financial_guidance_refusal"):
+        response = state.get("_final_response")
+        if isinstance(response, dict):
+            return {
+                "_final_response": response,
+                "_direct_answer": True,
+                "_financial_guidance_refusal": True,
+            }
+
     question = _effective_question(state)
     max_evidence_chunks = _budget_int(state, "max_evidence_chunks", 8)
     evidence = list(state.get("evidence", []))[:max_evidence_chunks]
@@ -2373,6 +2497,7 @@ def answer_composer(state: dict) -> dict:
                 "citations": [],
                 "answer_mode": "direct",
             }
+            refused_financial_guidance = _sanitize_financial_guidance_response(state, response)
             if compose_error:
                 response["trace_summary"] = (
                     f"direct_answer_error={compose_error['type']}: {compose_error['message']}"
@@ -2382,6 +2507,8 @@ def answer_composer(state: dict) -> dict:
                 "_direct_answer": True,
                 **llm_trace_update,
             }
+            if refused_financial_guidance:
+                update["_financial_guidance_refusal"] = True
             if compose_error:
                 update["_compose_error"] = compose_error
             else:
@@ -2467,12 +2594,15 @@ def answer_composer(state: dict) -> dict:
         "text": answer_text,
         "citations": [],
     }
+    refused_financial_guidance = _sanitize_financial_guidance_response(state, response)
     if compose_error:
         response["trace_summary"] = (
             f"answer_composer_error={compose_error['type']}: {compose_error['message']}"
         )
 
     update: dict[str, Any] = {"_final_response": response, **llm_trace_update}
+    if refused_financial_guidance:
+        update["_financial_guidance_refusal"] = True
     if compose_error:
         update["_compose_error"] = compose_error
     else:
@@ -2509,6 +2639,9 @@ def format_repair(state: dict) -> dict:
 
     text = response.get("text", "")
     citations = response.get("citations", [])
+    if _sanitize_financial_guidance_response(state, response):
+        text = response.get("text", "")
+        citations = response.get("citations", [])
 
     text = sanitize_markdown(text)
     if _has_inline_citation_tags(text):

@@ -81,18 +81,32 @@ def parse_fast_command(command: str, args: str = "") -> FastModeCommand | None:
         return None
     normalized_args = " ".join(str(args or "").strip().lower().split())
     if normalized_args in {"", "on"}:
-        return FastModeCommand("enable", "已开启 fast 模式，下一次请求会优先处理。")
+        return FastModeCommand(
+            "enable",
+            "已开启 fast 模式，下一次请求会尝试使用更快的回复通道。\n"
+            "Fast mode is on. Your next request will try to use a faster response tier.",
+        )
     if normalized_args in {"off", "disable", "cancel", "关闭", "取消"}:
-        return FastModeCommand("disable", "已取消 fast 模式。")
+        return FastModeCommand("disable", "已取消 fast 模式。\nFast mode is off.")
     if normalized_args in {"status", "状态"}:
         return FastModeCommand("status", "")
-    return FastModeCommand("invalid", "用法：/fast、/fast off、/fast status。/fast 只影响下一次请求。")
+    return FastModeCommand(
+        "invalid",
+        "用法：/fast、/fast off、/fast status。/fast 只加速下一次请求。\n"
+        "Usage: /fast, /fast off, /fast status. /fast only speeds up your next request.",
+    )
 
 
 def fast_status_message(*, pending: bool) -> str:
     if pending:
-        return "fast 模式已待命：下一次请求会优先处理。"
-    return "fast 模式未开启。发送 /fast 可让下一次请求优先处理。"
+        return (
+            "fast 模式已待命：下一次请求会尝试使用更快的回复通道。\n"
+            "Fast mode is ready: your next request will try to use a faster response tier."
+        )
+    return (
+        "fast 模式未开启。发送 /fast 可让下一次请求尝试更快回复。\n"
+        "Fast mode is off. Send /fast to try a faster response for your next request."
+    )
 
 
 def _base_command(command: str) -> str:

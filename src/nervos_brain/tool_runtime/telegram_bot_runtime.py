@@ -98,6 +98,7 @@ class TelegramBotAPI:
         self._cfg = config
         self._session = session or requests.Session()
         self._call_lock = threading.Lock()
+        self.last_send_results: list[dict[str, Any]] = []
 
     @property
     def api_base(self) -> str:
@@ -218,12 +219,14 @@ class TelegramBotAPI:
 
     def send_requests(self, requests_payloads: list[dict[str, Any]]) -> int:
         sent = 0
+        self.last_send_results = []
         for req in requests_payloads:
             method = str(req.get("method", "sendMessage"))
             payload = req.get("payload")
             if not isinstance(payload, dict):
                 raise TelegramBotRuntimeError("Invalid send request payload: expected object.")
-            self._send_request_with_plain_fallback(method=method, payload=payload)
+            result = self._send_request_with_plain_fallback(method=method, payload=payload)
+            self.last_send_results.append(_sent_result_row(method=method, result=result))
             sent += 1
         return sent
 
@@ -412,6 +415,8 @@ class TelegramPollingGateway:
         render_mode: str = "markdown",
         append_csat: bool = False,
         allowed_chat_ids: set[str] | None = None,
+        allowed_thread_ids: set[str] | None = None,
+        allowed_thread_ids_by_chat: dict[str, set[str]] | None = None,
         feedback_store: FeedbackJsonlStore | None = None,
         debug_log_file: str | Path | None = None,
         memory_service: Any | None = None,
@@ -434,6 +439,11 @@ class TelegramPollingGateway:
         self._render_mode = "plain" if render_mode == "plain" else "markdown"
         self._append_csat = append_csat
         self._allowed_chat_ids = set(allowed_chat_ids or [])
+        self._allowed_thread_ids = set(allowed_thread_ids or [])
+        self._allowed_thread_ids_by_chat = {
+            str(chat_id): {str(thread_id) for thread_id in thread_ids}
+            for chat_id, thread_ids in (allowed_thread_ids_by_chat or {}).items()
+        }
         self._feedback_store = feedback_store
         debug_path = str(debug_log_file or "").strip()
         self._debug_log_file = Path(debug_path).expanduser() if debug_path else None
@@ -611,6 +621,18 @@ class TelegramPollingGateway:
                 "sent_count": 0,
             }
 
+        thread_id = _thread_id_from_envelope(envelope)
+        if not self._is_thread_allowed(chat_id=chat_id or raw_chat_id, thread_id=thread_id):
+            return {
+                "update_id": update_id,
+                "chat_id": chat_id or raw_chat_id,
+                "thread_id": thread_id,
+                "ignored": True,
+                "reason": "thread_not_allowed",
+                "request_id": None,
+                "sent_count": 0,
+            }
+
         if _is_feedback_command(envelope):
             return self._process_feedback_command(
                 update_id=update_id,
@@ -721,8 +743,10 @@ class TelegramPollingGateway:
         )
         send_reqs = outbound_message_to_telegram_requests(outbound)
         sent_count = 0
+        send_results: list[dict[str, Any]] = []
         if not dry_run:
             sent_count = self._api.send_requests(send_reqs)
+            send_results = _api_last_send_results(self._api)
             if self._feedback_store is not None:
                 with self._feedback_lock:
                     self._feedback_store.append_answer(
@@ -744,6 +768,7 @@ class TelegramPollingGateway:
             result=result,
             outbound=outbound,
             send_reqs=send_reqs,
+            send_results=send_results,
             sent_count=sent_count if not dry_run else len(send_reqs),
             dry_run=dry_run,
         )
@@ -1020,6 +1045,19 @@ class TelegramPollingGateway:
                 "sent_count": 0,
             }
 
+        context = _feedback_context_from_callback(callback)
+        thread_id = str(context.get("thread_id", "") or "")
+        if not self._is_thread_allowed(chat_id=chat_id or raw_chat_id, thread_id=thread_id):
+            return {
+                "update_id": update_id,
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+                "ignored": True,
+                "reason": "thread_not_allowed",
+                "request_id": None,
+                "sent_count": 0,
+            }
+
         data = str(callback.get("data", ""))
         try:
             parsed = parse_csat_callback_data(data)
@@ -1041,7 +1079,6 @@ class TelegramPollingGateway:
         sender = callback.get("from")
         if not isinstance(sender, dict):
             sender = {}
-        context = _feedback_context_from_callback(callback)
         answer_meta = None
         if self._feedback_store is not None:
             with self._feedback_lock:
@@ -1097,6 +1134,14 @@ class TelegramPollingGateway:
             "is_bad_case": bool(record.get("is_bad_case", parsed.score <= 3)),
             "is_duplicate_rating": bool(record.get("is_duplicate_rating", False)),
         }
+
+    def _is_thread_allowed(self, *, chat_id: str | None, thread_id: str) -> bool:
+        chat_key = str(chat_id or "")
+        if chat_key in self._allowed_thread_ids_by_chat:
+            return str(thread_id) in self._allowed_thread_ids_by_chat[chat_key]
+        if self._allowed_thread_ids:
+            return str(thread_id) in self._allowed_thread_ids
+        return True
 
     def _process_feedback_command(
         self,
@@ -1170,6 +1215,7 @@ class TelegramPollingGateway:
         result: dict[str, Any],
         outbound: dict[str, Any],
         send_reqs: list[dict[str, Any]],
+        send_results: list[dict[str, Any]],
         sent_count: int,
         dry_run: bool,
     ) -> None:
@@ -1197,6 +1243,8 @@ class TelegramPollingGateway:
                 "recent_messages_preview": _debug_recent_messages_preview(state.get("recent_messages")),
                 "outbound_reply_to_message_id": str(outbound.get("reply_to_message_id", "")),
                 "first_send_reply_to_message_id": _first_send_reply_to_message_id(send_reqs),
+                "sent_message_ids": _sent_message_ids(send_results),
+                "send_results": send_results[:10],
                 "content_preview": _message_text_preview(_extract_message_payload(update), limit=240),
                 "normalized_content": str(envelope.get("content", ""))[:240],
                 "route_decision": str(result.get("_route_decision") or state.get("_route_decision") or ""),
@@ -1412,11 +1460,49 @@ def _is_bot_command_for_this_bot(
 
 def _has_bot_mention(msg: dict[str, Any], *, bot_username: str) -> bool:
     text = _message_text(msg)
+    if _has_bot_mention_entity(msg, bot_username=bot_username):
+        return True
     if not text:
         return False
     if bot_username:
         return re.search(rf"@{re.escape(bot_username)}\b", text, flags=re.IGNORECASE) is not None
     return re.search(r"@\w+_Bot\b", text, flags=re.IGNORECASE) is not None
+
+
+def _has_bot_mention_entity(msg: dict[str, Any], *, bot_username: str) -> bool:
+    text = _message_text(msg)
+    entities = msg.get("entities")
+    if not isinstance(entities, list):
+        entities = msg.get("caption_entities")
+    if not isinstance(entities, list):
+        return False
+
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        entity_type = str(entity.get("type", "") or "")
+        if entity_type == "text_mention":
+            user = entity.get("user")
+            if isinstance(user, dict):
+                username = str(user.get("username", "") or "").lstrip("@")
+                if bot_username and username.lower() == bot_username.lower():
+                    return True
+                if bool(user.get("is_bot")) and not bot_username:
+                    return True
+        if entity_type != "mention":
+            continue
+        try:
+            offset = int(entity.get("offset", 0))
+            length = int(entity.get("length", 0))
+        except (TypeError, ValueError):
+            continue
+        mention = text[offset: offset + length].lstrip("@")
+        if bot_username:
+            if mention.lower() == bot_username.lower():
+                return True
+        elif mention.lower().endswith("_bot"):
+            return True
+    return False
 
 
 def _is_reply_to_this_bot(
@@ -1704,6 +1790,15 @@ def _feedback_context_from_callback(callback: dict[str, Any]) -> dict[str, str]:
     return context
 
 
+def _thread_id_from_envelope(envelope: dict[str, Any]) -> str:
+    context = envelope.get("context", {})
+    if isinstance(context, dict):
+        value = context.get("thread_id")
+        if value is not None and str(value).strip():
+            return str(value)
+    return ""
+
+
 def _first_send_reply_to_message_id(send_reqs: list[dict[str, Any]]) -> str:
     for req in send_reqs:
         if not isinstance(req, dict):
@@ -1712,6 +1807,39 @@ def _first_send_reply_to_message_id(send_reqs: list[dict[str, Any]]) -> str:
         if isinstance(payload, dict) and payload.get("reply_to_message_id") is not None:
             return str(payload.get("reply_to_message_id"))
     return ""
+
+
+def _sent_result_row(*, method: str, result: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {"method": str(method)}
+    if isinstance(result, dict):
+        if result.get("message_id") is not None:
+            row["message_id"] = str(result.get("message_id"))
+        chat = result.get("chat")
+        if isinstance(chat, dict) and chat.get("id") is not None:
+            row["chat_id"] = str(chat.get("id"))
+        if result.get("message_thread_id") is not None:
+            row["message_thread_id"] = str(result.get("message_thread_id"))
+        if result.get("date") is not None:
+            row["date"] = str(result.get("date"))
+    return row
+
+
+def _api_last_send_results(api: Any) -> list[dict[str, Any]]:
+    rows = getattr(api, "last_send_results", [])
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _sent_message_ids(send_results: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+    for row in send_results:
+        if not isinstance(row, dict):
+            continue
+        message_id = str(row.get("message_id", "") or "").strip()
+        if message_id:
+            ids.append(message_id)
+    return ids
 
 
 def _debug_info_needs(value: Any) -> list[dict[str, Any]]:

@@ -19,4 +19,5 @@ def test_talk_forum_service_uses_incremental_latest_pages_default():
 
     assert "Environment=TALK_LATEST_PAGES=3" in service
     assert "run_talk_forum_ingest.py --latest-pages \"$TALK_LATEST_PAGES\" --incremental" in service
-    assert "MAMBA_ENV=nervos-brain" in service
+    assert "ENV_RUNNER_BIN" in service
+    assert "ENV_NAME=nervos-brain" in service

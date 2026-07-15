@@ -15,7 +15,7 @@ bash restart_telegram_bot.sh
 
 ```text
 ENV_NAME=nervos-brain
-MAMBA_BIN=mamba
+ENV_RUNNER_BIN=conda
 PROJECT_ROOT=/optional/repo/root
 DEBUG=1
 DRY_RUN=1
@@ -43,7 +43,7 @@ ps -eo pid,args | grep scripts/run_telegram_bot_polling.py | grep -v grep
 
 ```bash
 export DISCORD_BOT_TOKEN="<DISCORD_BOT_TOKEN>"
-mamba run -n nervos-brain python scripts/run_discord_bot.py
+conda run -n nervos-brain python scripts/run_discord_bot.py
 ```
 
 该命令是前台运行，适合首次验证。长期运行请用 `tmux`、`systemd`、`supervisor` 或部署方已有进程管理；当前仓库暂未提供 Discord 专用 restart 脚本。Discord Developer Portal 必须开启 `MESSAGE CONTENT INTENT`。同一个 Discord Bot token 不建议启动多个 gateway 进程，响应范围由 `discord_bot.allowed_guild_ids` 和 `discord_bot.allowed_channel_ids` 控制。
@@ -68,7 +68,7 @@ Telegram 和 Discord 都支持用户侧 `/fast` 一次性加速开关：
 /fast status
 ```
 
-`/fast` 不会立刻进入问答，只会把当前用户的下一次正常请求标记为 priority。下一条请求开始处理后，这个标记会自动清除；其他用户不受影响。它只改变模型 API 的 `service_tier="priority"`，不改变模型档位、检索策略或回答 prompt，因此更适合临时赶时间的问题。priority 通常更贵，默认不开启。
+`/fast` 不会立刻进入问答，也不是群内排队优先；它只会让当前用户的下一次正常请求尝试使用更快的模型 API 服务层级（内部为 `service_tier="priority"`）。下一条请求开始处理后，这个标记会自动清除；其他用户不受影响。它不改变模型档位、检索策略或回答 prompt，因此更适合临时赶时间的问题。priority 通常更贵，默认不开启。
 
 状态文件默认写入 `data/runtime/fast_mode_state.json`，只保存 `platform + user_id` 的待消费标记，不保存聊天内容或密钥。该目录是本地 runtime 私有数据，不提交。
 
@@ -90,7 +90,7 @@ curl http://127.0.0.1:6333/collections
 重建 collection：
 
 ```bash
-mamba run -n nervos-brain python scripts/migrate_qdrant_server_from_archive.py \
+conda run -n nervos-brain python scripts/migrate_qdrant_server_from_archive.py \
   --public-default-backends \
   --recreate
 ```
@@ -108,8 +108,8 @@ GitHub 文档和代码库默认每周增量更新一次。增量逻辑会检查�
 一次性手动执行：
 
 ```bash
-mamba run -n nervos-brain python scripts/run_github_docs_ingest.py --incremental
-mamba run -n nervos-brain python scripts/run_github_code_ingest.py --incremental
+conda run -n nervos-brain python scripts/run_github_docs_ingest.py --incremental
+conda run -n nervos-brain python scripts/run_github_code_ingest.py --incremental
 ```
 
 推荐配置 `GITHUB_TOKEN` 以降低 rate limit 风险：
@@ -139,7 +139,7 @@ systemctl --user enable --now nervos-github-ingest.timer
 一次性手动执行：
 
 ```bash
-mamba run -n nervos-brain python scripts/run_talk_forum_ingest.py --latest-pages 3 --incremental
+conda run -n nervos-brain python scripts/run_talk_forum_ingest.py --latest-pages 3 --incremental
 ```
 
 增量更新不需要先停止 Bot。它会把新论坛内容写入 SQLite archive 和 Qdrant server；后续向量检索通常可以直接看到新数据。需要注意的是，正在运行的 Bot 进程里的 BM25/fuzzy/exact 相关索引是启动时从 archive DB 构建的内存快照。如果希望所有检索路径都立刻使用新增内容，增量更新完成后重启 Bot 即可，通常耗时不到一分钟。
@@ -158,8 +158,8 @@ systemctl --user enable --now nervos-talk-forum-ingest.timer
 
 ```ini
 Environment=PROJECT_ROOT=%h/path/to/Nervos-Brain
-Environment=MAMBA_BIN=%h/miniforge3/bin/mamba
-Environment=MAMBA_ENV=nervos-brain
+Environment=ENV_RUNNER_BIN=%h/miniconda3/bin/conda
+Environment=ENV_NAME=nervos-brain
 Environment=TALK_LATEST_PAGES=3
 ```
 

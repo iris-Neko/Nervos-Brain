@@ -133,6 +133,7 @@ class FullGraphState(GraphState, total=False):
     _ask_user_guard_reason: str
     _terminal_insufficient_evidence: bool
     _direct_answer: bool
+    _financial_guidance_refusal: bool
 
 
 @dataclass

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ENV_NAME="${ENV_NAME:-nervos-brain}"
+ENV_NAME="${ENV_NAME:-${MAMBA_ENV:-nervos-brain}}"
 SCRIPT_PATH="${SCRIPT_PATH:-scripts/run_telegram_bot_polling.py}"
-MAMBA_BIN="${MAMBA_BIN:-${MICROMAMBA_BIN:-mamba}}"
+ENV_RUNNER_BIN="${ENV_RUNNER_BIN:-${MAMBA_BIN:-${MICROMAMBA_BIN:-}}}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 LOG_DIR="${LOG_DIR:-data/logs}"
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
@@ -42,25 +42,43 @@ bot_pids() {
     | grep -v "^$$$" || true
 }
 
+detect_env_runner() {
+  if [[ -n "$ENV_RUNNER_BIN" ]]; then
+    if command -v "$ENV_RUNNER_BIN" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "Cannot find environment runner command: $ENV_RUNNER_BIN" >&2
+    echo "Set ENV_RUNNER_BIN=/path/to/mamba, /path/to/micromamba, or /path/to/conda." >&2
+    exit 1
+  fi
+
+  for candidate in mamba micromamba conda; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      ENV_RUNNER_BIN="$candidate"
+      return 0
+    fi
+  done
+
+  echo "Cannot find mamba, micromamba, or conda." >&2
+  echo "Install one of them, initialize your shell, or set ENV_RUNNER_BIN=/path/to/runner." >&2
+  exit 1
+}
+
 if [[ ! -f "$SCRIPT_PATH" ]]; then
   echo "Cannot find $SCRIPT_PATH under project root: $ROOT" >&2
   echo "Put this script in the repository root, or run with PROJECT_ROOT=/path/to/repo." >&2
   exit 1
 fi
 
-if ! command -v "$MAMBA_BIN" >/dev/null 2>&1; then
-  echo "Cannot find mamba command: $MAMBA_BIN" >&2
-  echo "Install mamba/micromamba, initialize your shell, or set MAMBA_BIN=/path/to/mamba." >&2
-  exit 1
-fi
+detect_env_runner
 
 if [[ -z "$PYTHON_BIN" ]]; then
-  PYTHON_BIN="$("$MAMBA_BIN" run -n "$ENV_NAME" python -c 'import sys; print(sys.executable)')"
+  PYTHON_BIN="$("$ENV_RUNNER_BIN" run -n "$ENV_NAME" python -c 'import sys; print(sys.executable)')"
 fi
 
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
   echo "Cannot find executable Python for env=$ENV_NAME: $PYTHON_BIN" >&2
-  echo "Set PYTHON_BIN=/path/to/env/bin/python or check the mamba environment." >&2
+  echo "Set PYTHON_BIN=/path/to/env/bin/python or check the conda/mamba environment." >&2
   exit 1
 fi
 
