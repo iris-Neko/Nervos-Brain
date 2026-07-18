@@ -607,11 +607,16 @@ class TelegramPollingGateway:
                 "sent_count": 0,
             }
 
+        chat_id_command = _is_chat_id_command(
+            msg,
+            envelope=envelope,
+            bot_username=self._bot_username,
+        )
         chat_id = (
             str(envelope.get("context", {}).get("channel_id") or "")
             or str(envelope.get("context", {}).get("guild_id") or "")
         )
-        if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids:
+        if self._allowed_chat_ids and chat_id not in self._allowed_chat_ids and not chat_id_command:
             return {
                 "update_id": update_id,
                 "chat_id": chat_id or raw_chat_id,
@@ -622,7 +627,7 @@ class TelegramPollingGateway:
             }
 
         thread_id = _thread_id_from_envelope(envelope)
-        if not self._is_thread_allowed(chat_id=chat_id or raw_chat_id, thread_id=thread_id):
+        if not chat_id_command and not self._is_thread_allowed(chat_id=chat_id or raw_chat_id, thread_id=thread_id):
             return {
                 "update_id": update_id,
                 "chat_id": chat_id or raw_chat_id,
@@ -632,6 +637,15 @@ class TelegramPollingGateway:
                 "request_id": None,
                 "sent_count": 0,
             }
+
+        if chat_id_command:
+            return self._process_chat_id_command(
+                update_id=update_id,
+                envelope=envelope,
+                message=msg,
+                chat_id=chat_id or raw_chat_id,
+                dry_run=dry_run,
+            )
 
         if _is_feedback_command(envelope):
             return self._process_feedback_command(
@@ -830,6 +844,50 @@ class TelegramPollingGateway:
             "request_id": None,
             "sent_count": 0 if dry_run else 1,
             "fast_action": action,
+        }
+
+    def _process_chat_id_command(
+        self,
+        *,
+        update_id: int | None,
+        envelope: dict[str, Any],
+        message: dict[str, Any],
+        chat_id: str | None,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        chat = message.get("chat")
+        chat = chat if isinstance(chat, dict) else {}
+        chat_type = str(chat.get("type", "") or "unknown")
+        chat_title = _telegram_chat_display_name(chat)
+        thread_id = _thread_id_from_envelope(envelope)
+        lines = [
+            f"Chat title: {chat_title}",
+            f"Chat type: {chat_type}",
+            f"Chat ID: {chat_id or 'unknown'}",
+        ]
+        if thread_id:
+            lines.append(f"Topic ID: {thread_id}")
+        text = "\n".join(lines)
+        if not dry_run:
+            self._api.send_requests(
+                [
+                    _send_text_request(
+                        chat_id=chat_id,
+                        text=text,
+                        envelope=envelope,
+                        reply_to_message_id=str(envelope.get("message_id", "")) or None,
+                    )
+                ]
+            )
+        return {
+            "update_id": update_id,
+            "chat_id": chat_id,
+            "thread_id": thread_id,
+            "chat_title": chat_title,
+            "ignored": False,
+            "reason": "chat_id_command",
+            "request_id": None,
+            "sent_count": 0 if dry_run else 1,
         }
 
     def _consume_fast_mode(self, envelope: dict[str, Any]) -> bool:
@@ -1423,6 +1481,33 @@ def _message_text(msg: dict[str, Any]) -> str:
     return ""
 
 
+def _telegram_chat_display_name(chat: dict[str, Any]) -> str:
+    title = str(chat.get("title", "") or "").strip()
+    if title:
+        return _single_line_preview(title, limit=200)
+
+    username = str(chat.get("username", "") or "").strip().lstrip("@")
+    if username:
+        return f"@{username}"
+
+    name = " ".join(
+        part
+        for part in (
+            str(chat.get("first_name", "") or "").strip(),
+            str(chat.get("last_name", "") or "").strip(),
+        )
+        if part
+    )
+    return _single_line_preview(name, limit=200) if name else "Unnamed chat"
+
+
+def _single_line_preview(value: str, *, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _is_group_chat(msg: dict[str, Any]) -> bool:
     chat = msg.get("chat")
     if not isinstance(chat, dict):
@@ -1444,7 +1529,7 @@ def _is_bot_command_for_this_bot(
     bot_username: str,
 ) -> bool:
     command = str(envelope.get("command", "") or "").split("@", 1)[0].lower()
-    known_commands = {"/ask", "/help", "/start", "/feedback", "/fast"}
+    known_commands = {"/ask", "/help", "/start", "/feedback", "/fast", "/chatid"}
     if command not in known_commands:
         return False
     raw = _raw_command_target(_message_text(msg))
@@ -1456,6 +1541,22 @@ def _is_bot_command_for_this_bot(
     if not bot_username:
         return True
     return target.lower() == bot_username.lower()
+
+
+def _is_chat_id_command(
+    msg: dict[str, Any] | None,
+    *,
+    envelope: dict[str, Any],
+    bot_username: str,
+) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    command = str(envelope.get("command", "") or "").split("@", 1)[0].lower()
+    return command == "/chatid" and _is_bot_command_for_this_bot(
+        msg,
+        envelope=envelope,
+        bot_username=bot_username,
+    )
 
 
 def _has_bot_mention(msg: dict[str, Any], *, bot_username: str) -> bool:

@@ -987,6 +987,61 @@ def test_group_bot_command_processes_without_mention():
     assert captured["user_message"]["command_args"] == "fiber open channel"
 
 
+def test_chat_id_command_works_outside_allowlist_and_skips_graph():
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    update = _sample_update(
+        chat_id=-100777,
+        thread_id=42,
+        text="/chatid@NBCKB_Bot",
+    )
+    update["message"]["chat"]["title"] = "Partner Managed Group"
+
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {},
+        bot_username="NBCKB_Bot",
+        allowed_chat_ids={"-100123"},
+        allowed_thread_ids={"99"},
+    )
+
+    row = gateway.process_update(update, dry_run=False)
+
+    assert row["ignored"] is False
+    assert row["reason"] == "chat_id_command"
+    assert row["chat_id"] == "-100777"
+    assert row["thread_id"] == "42"
+    assert row["chat_title"] == "Partner Managed Group"
+    assert calls == []
+    payload = fake_api.sent_requests[-1]["payload"]
+    assert payload["chat_id"] == -100777
+    assert payload["reply_to_message_id"] == 1
+    assert payload["message_thread_id"] == 42
+    assert "Chat ID: -100777" in payload["text"]
+    assert "Topic ID: 42" in payload["text"]
+
+
+def test_chat_id_command_for_other_bot_does_not_bypass_allowlist():
+    fake_api = _FakeAPI()
+    calls: list[dict[str, Any]] = []
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: calls.append(state) or {},
+        bot_username="NBCKB_Bot",
+        allowed_chat_ids={"-100123"},
+    )
+
+    row = gateway.process_update(
+        _sample_update(chat_id=-100777, text="/chatid@OtherBot"),
+        dry_run=False,
+    )
+
+    assert row["ignored"] is True
+    assert row["reason"] == "chat_not_allowed"
+    assert calls == []
+    assert fake_api.sent_requests == []
+
+
 def test_group_command_for_other_bot_is_ignored():
     fake_api = _FakeAPI()
     calls: list[dict[str, Any]] = []
