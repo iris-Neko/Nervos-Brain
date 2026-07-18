@@ -987,7 +987,7 @@ def test_group_bot_command_processes_without_mention():
     assert captured["user_message"]["command_args"] == "fiber open channel"
 
 
-def test_chat_id_command_works_outside_allowlist_and_skips_graph():
+def test_chat_id_command_sends_group_id_to_authorized_user_privately():
     fake_api = _FakeAPI()
     calls: list[dict[str, Any]] = []
     update = _sample_update(
@@ -1003,6 +1003,9 @@ def test_chat_id_command_works_outside_allowlist_and_skips_graph():
         bot_username="NBCKB_Bot",
         allowed_chat_ids={"-100123"},
         allowed_thread_ids={"99"},
+        chat_id_command_enabled=True,
+        chat_id_command_allowed_user_ids={"42"},
+        chat_id_command_private_response=True,
     )
 
     row = gateway.process_update(update, dry_run=False)
@@ -1012,13 +1015,77 @@ def test_chat_id_command_works_outside_allowlist_and_skips_graph():
     assert row["chat_id"] == "-100777"
     assert row["thread_id"] == "42"
     assert row["chat_title"] == "Partner Managed Group"
+    assert row["response_chat_id"] == "42"
+    assert row["response_mode"] == "private"
     assert calls == []
+    payload = fake_api.sent_requests[-1]["payload"]
+    assert payload["chat_id"] == 42
+    assert "reply_to_message_id" not in payload
+    assert "message_thread_id" not in payload
+    assert "Chat ID: -100777" in payload["text"]
+    assert "Topic ID: 42" in payload["text"]
+
+
+def test_chat_id_command_can_be_configured_to_reply_in_same_chat():
+    fake_api = _FakeAPI()
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {},
+        bot_username="NBCKB_Bot",
+        chat_id_command_enabled=True,
+        chat_id_command_allowed_user_ids={"42"},
+        chat_id_command_private_response=False,
+    )
+
+    row = gateway.process_update(
+        _sample_update(chat_id=-100777, thread_id=42, text="/chatid@NBCKB_Bot"),
+        dry_run=False,
+    )
+
+    assert row["ignored"] is False
+    assert row["response_mode"] == "same_chat"
     payload = fake_api.sent_requests[-1]["payload"]
     assert payload["chat_id"] == -100777
     assert payload["reply_to_message_id"] == 1
     assert payload["message_thread_id"] == 42
-    assert "Chat ID: -100777" in payload["text"]
-    assert "Topic ID: 42" in payload["text"]
+
+
+def test_chat_id_command_requires_configured_user():
+    fake_api = _FakeAPI()
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {},
+        bot_username="NBCKB_Bot",
+        chat_id_command_enabled=True,
+        chat_id_command_allowed_user_ids={"42"},
+    )
+
+    row = gateway.process_update(
+        _sample_update(chat_id=-100777, user_id=43, text="/chatid@NBCKB_Bot"),
+        dry_run=False,
+    )
+
+    assert row["ignored"] is True
+    assert row["reason"] == "chat_id_command_not_allowed"
+    assert fake_api.sent_requests == []
+
+
+def test_chat_id_command_is_disabled_by_default():
+    fake_api = _FakeAPI()
+    gateway = TelegramPollingGateway(
+        api=fake_api,  # type: ignore[arg-type]
+        graph_runner=lambda state: {},
+        bot_username="NBCKB_Bot",
+    )
+
+    row = gateway.process_update(
+        _sample_update(chat_id=-100777, text="/chatid@NBCKB_Bot"),
+        dry_run=False,
+    )
+
+    assert row["ignored"] is True
+    assert row["reason"] == "chat_id_command_disabled"
+    assert fake_api.sent_requests == []
 
 
 def test_chat_id_command_for_other_bot_does_not_bypass_allowlist():
@@ -1753,6 +1820,22 @@ def test_telegram_runner_config_loads_when_cwd_differs(monkeypatch, tmp_path):
     cfg = runner._load_telegram_bot_cfg()
 
     assert cfg["memory_db"] == "data/telegram_bot/memory.db"
+
+
+def test_telegram_runner_parses_private_chat_id_command_config():
+    runner = _load_script_module("run_telegram_bot_chat_id_config", "run_telegram_bot_polling.py")
+
+    parsed = runner._parse_chat_id_command_config(
+        {
+            "chat_id_command": {
+                "enabled": "yes",
+                "allowed_user_ids": ["42", "43, 44"],
+                "private_response": False,
+            }
+        }
+    )
+
+    assert parsed == (True, {"42", "43", "44"}, False)
 
 
 def test_telegram_runner_resolves_runtime_paths_to_project_root(monkeypatch, tmp_path):

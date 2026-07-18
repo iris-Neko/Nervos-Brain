@@ -170,6 +170,13 @@ telegram_bot:
   # 可通过 dry-run 观察日志中的 chat_id 后填入，例如 "-1001234567890"。
   allowed_chat_ids: []
 
+  # /chatid 诊断命令。建议只给管理员用户 ID 开启，并默认私聊返回结果。
+  # 命令可以在群里发送，但结果会发到该用户的 Telegram 私聊，不会显示在群里。
+  chat_id_command:
+    enabled: false
+    allowed_user_ids: []
+    private_response: true
+
   # 打开后，Telegram 最后一段回复会附带 1-5 分 inline keyboard。
   append_csat: true
 

@@ -425,6 +425,9 @@ class TelegramPollingGateway:
         respond_to_bot_replies: bool = True,
         bot_user_id: str | None = None,
         bot_username: str | None = None,
+        chat_id_command_enabled: bool = False,
+        chat_id_command_allowed_user_ids: set[str] | None = None,
+        chat_id_command_private_response: bool = True,
         target_elapsed_ms: int = 30000,
         max_elapsed_ms: int = 90000,
         progress_update_config: ProgressUpdateConfig | None = None,
@@ -453,6 +456,13 @@ class TelegramPollingGateway:
         self._respond_to_bot_replies = bool(respond_to_bot_replies)
         self._bot_user_id = str(bot_user_id or "").strip()
         self._bot_username = str(bot_username or "").lstrip("@").strip()
+        self._chat_id_command_enabled = bool(chat_id_command_enabled)
+        self._chat_id_command_allowed_user_ids = {
+            str(user_id).strip()
+            for user_id in (chat_id_command_allowed_user_ids or set())
+            if str(user_id).strip()
+        }
+        self._chat_id_command_private_response = bool(chat_id_command_private_response)
         self._target_elapsed_ms = max(0, int(target_elapsed_ms or 0))
         self._max_elapsed_ms = max(0, int(max_elapsed_ms or 0))
         self._progress_update_config = progress_update_config or ProgressUpdateConfig(enabled=False)
@@ -612,6 +622,19 @@ class TelegramPollingGateway:
             envelope=envelope,
             bot_username=self._bot_username,
         )
+        if chat_id_command and not self._is_chat_id_command_authorized(envelope):
+            return {
+                "update_id": update_id,
+                "chat_id": raw_chat_id,
+                "ignored": True,
+                "reason": (
+                    "chat_id_command_disabled"
+                    if not self._chat_id_command_enabled
+                    else "chat_id_command_not_allowed"
+                ),
+                "request_id": None,
+                "sent_count": 0,
+            }
         chat_id = (
             str(envelope.get("context", {}).get("channel_id") or "")
             or str(envelope.get("context", {}).get("guild_id") or "")
@@ -860,6 +883,9 @@ class TelegramPollingGateway:
         chat_type = str(chat.get("type", "") or "unknown")
         chat_title = _telegram_chat_display_name(chat)
         thread_id = _thread_id_from_envelope(envelope)
+        context = envelope.get("context", {})
+        user_id = str(context.get("user_id", "") or "").strip() if isinstance(context, dict) else ""
+        response_chat_id = user_id if self._chat_id_command_private_response else chat_id
         lines = [
             f"Chat title: {chat_title}",
             f"Chat type: {chat_type}",
@@ -872,10 +898,15 @@ class TelegramPollingGateway:
             self._api.send_requests(
                 [
                     _send_text_request(
-                        chat_id=chat_id,
+                        chat_id=response_chat_id,
                         text=text,
                         envelope=envelope,
-                        reply_to_message_id=str(envelope.get("message_id", "")) or None,
+                        reply_to_message_id=(
+                            None
+                            if self._chat_id_command_private_response
+                            else str(envelope.get("message_id", "")) or None
+                        ),
+                        include_thread_id=not self._chat_id_command_private_response,
                     )
                 ]
             )
@@ -884,11 +915,22 @@ class TelegramPollingGateway:
             "chat_id": chat_id,
             "thread_id": thread_id,
             "chat_title": chat_title,
+            "response_chat_id": response_chat_id,
+            "response_mode": "private" if self._chat_id_command_private_response else "same_chat",
             "ignored": False,
             "reason": "chat_id_command",
             "request_id": None,
             "sent_count": 0 if dry_run else 1,
         }
+
+    def _is_chat_id_command_authorized(self, envelope: dict[str, Any]) -> bool:
+        if not self._chat_id_command_enabled:
+            return False
+        context = envelope.get("context", {})
+        if not isinstance(context, dict):
+            return False
+        user_id = str(context.get("user_id", "") or "").strip()
+        return bool(user_id and user_id in self._chat_id_command_allowed_user_ids)
 
     def _consume_fast_mode(self, envelope: dict[str, Any]) -> bool:
         context = envelope.get("context", {}) if isinstance(envelope.get("context"), dict) else {}
@@ -2219,6 +2261,7 @@ def _send_text_request(
     text: str,
     envelope: dict[str, Any],
     reply_to_message_id: str | None = None,
+    include_thread_id: bool = True,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": _coerce_numeric_or_keep(chat_id or ""),
@@ -2228,7 +2271,7 @@ def _send_text_request(
     if reply_to_message_id:
         payload["reply_to_message_id"] = _coerce_numeric_or_keep(reply_to_message_id)
     context = envelope.get("context", {})
-    if isinstance(context, dict) and context.get("thread_id") is not None:
+    if include_thread_id and isinstance(context, dict) and context.get("thread_id") is not None:
         payload["message_thread_id"] = _coerce_numeric_or_keep(context["thread_id"])
     return {"method": "sendMessage", "payload": payload}
 

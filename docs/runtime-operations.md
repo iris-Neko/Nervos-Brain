@@ -72,13 +72,24 @@ Telegram 和 Discord 都支持用户侧 `/fast` 一次性加速开关：
 
 状态文件默认写入 `data/runtime/fast_mode_state.json`，只保存 `platform + user_id` 的待消费标记，不保存聊天内容或密钥。该目录是本地 runtime 私有数据，不提交。
 
-Telegram 还支持 `/chatid` 诊断命令，用于确认 Bot 当前所在群组和 Topic：
+Telegram 还支持可配置的 `/chatid` 诊断命令，用于确认 Bot 当前所在群组和 Topic。建议只给管理员用户开启：
 
 ```text
 /chatid@NBCKB_Bot
 ```
 
-Bot 会直接返回群标题、`chat_id`，以及当前 Topic 的 `message_thread_id`（如果消息位于 Topic 中）。该命令不进入 Graph，也不受 `allowed_chat_ids` 和 Topic 白名单限制，方便在别人管理的新群里先确认 ID；其它普通消息仍然遵守原有白名单和 mention 规则。
+配置示例：
+
+```yaml
+telegram_bot:
+  chat_id_command:
+    enabled: true
+    allowed_user_ids:
+      - "<YOUR_TELEGRAM_USER_ID>"
+    private_response: true
+```
+
+管理员可以在群里发送命令，Bot 会把群标题、`chat_id` 和当前 Topic 的 `message_thread_id`（如果有）私聊发给管理员，不会把 ID 返回到群里。命令不进入 Graph，也不受 `allowed_chat_ids` 和 Topic 白名单限制；其它普通消息仍然遵守原有白名单和 mention 规则。`private_response: false` 时才会回到命令所在群聊，只有在受控调试环境中使用。
 
 ## Qdrant Docker server
 

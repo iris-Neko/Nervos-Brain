@@ -213,6 +213,19 @@ def _parse_allowed_thread_ids(values: list[str]) -> set[str]:
     return _parse_id_set(values)
 
 
+def _parse_chat_id_command_config(
+    bot_cfg: dict[str, Any],
+) -> tuple[bool, set[str], bool]:
+    raw_cfg = bot_cfg.get("chat_id_command", {})
+    cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+    enabled = _cfg_bool(cfg, "enabled", False)
+    allowed_user_ids = _parse_id_set(
+        _str_list_from_value(cfg.get("allowed_user_ids", []))
+    )
+    private_response = _cfg_bool(cfg, "private_response", True)
+    return enabled, allowed_user_ids, private_response
+
+
 def _parse_allowed_thread_ids_by_chat(value: Any) -> dict[str, set[str]]:
     if not isinstance(value, dict):
         return {}
@@ -419,6 +432,11 @@ def main() -> int:
     allowed_thread_ids_by_chat = _parse_allowed_thread_ids_by_chat(
         bot_cfg.get("allowed_thread_ids_by_chat", {})
     )
+    (
+        chat_id_command_enabled,
+        chat_id_command_allowed_user_ids,
+        chat_id_command_private_response,
+    ) = _parse_chat_id_command_config(bot_cfg)
     feedback_file = resolve_project_path(args.feedback_file)
     debug_log_file = resolve_project_path(args.debug_log_file) if str(args.debug_log_file).strip() else None
     fast_mode_state_file = resolve_project_path(args.fast_mode_state_file)
@@ -443,6 +461,9 @@ def main() -> int:
         respond_to_bot_replies=bool(args.respond_to_bot_replies),
         bot_user_id=str(me.get("id", "") or ""),
         bot_username=str(username or ""),
+        chat_id_command_enabled=chat_id_command_enabled,
+        chat_id_command_allowed_user_ids=chat_id_command_allowed_user_ids,
+        chat_id_command_private_response=chat_id_command_private_response,
         target_elapsed_ms=max(0, int(args.target_elapsed_ms)),
         max_elapsed_ms=max(0, int(args.max_elapsed_ms)),
         progress_update_config=progress_update_cfg,
@@ -463,6 +484,12 @@ def main() -> int:
         bool(args.respond_to_bot_replies),
         feedback_file,
         debug_log_file or "disabled",
+    )
+    logger.info(
+        "Telegram chat ID command: enabled=%s allowed_user_count=%d private_response=%s",
+        chat_id_command_enabled,
+        len(chat_id_command_allowed_user_ids),
+        chat_id_command_private_response,
     )
 
     if args.drop_pending_on_start:
