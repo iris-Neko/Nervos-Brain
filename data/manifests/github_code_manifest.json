@@ -11,7 +11,7 @@
     "https://github.com/web5fans"
   ],
   "targets_hash": "f62918a0c45af6df",
-  "generated_ts_ms": 1784516638692,
+  "generated_ts_ms": 1784563894967,
   "repos": [
     {
       "repo": "appfi5/SupeRISE-for-agent",
@@ -114,9 +114,9 @@
     {
       "repo": "ckb-devrel/offckb",
       "branch": "develop",
-      "commit": "303f54e79859fab5f5d7d6b2ef149d1a209c6e34",
-      "doc_count": 96,
-      "updated_ts_ms": 1784516557953
+      "commit": "325d3789c2efb9dc14c5fe734a12eb369615628e",
+      "doc_count": 104,
+      "updated_ts_ms": 1784563880450
     },
     {
       "repo": "ckb-devrel/ssri-server",
@@ -198,9 +198,9 @@
     {
       "repo": "nervosnetwork/ckb",
       "branch": "develop",
-      "commit": "756f429b11da1b05ffdecb0d31035955112c0d02",
-      "doc_count": 1023,
-      "updated_ts_ms": 1784515950731
+      "commit": "91b97ab5f67fea203fdc5e5d6fbc19a5e0f8b987",
+      "doc_count": 1024,
+      "updated_ts_ms": 1784563713147
     },
     {
       "repo": "nervosnetwork/ckb-assets",
@@ -695,9 +695,9 @@
     {
       "repo": "nervosnetwork/docs.nervos.org",
       "branch": "develop",
-      "commit": "cbdea1564c1a012066bdcfefa60d146477d3099f",
+      "commit": "3795a91e9479a84598cc92cb3f59ae2a152f7f35",
       "doc_count": 288,
-      "updated_ts_ms": 1784516161415
+      "updated_ts_ms": 1784563780974
     },
     {
       "repo": "nervosnetwork/eaglesong",
