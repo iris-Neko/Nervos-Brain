@@ -2305,6 +2305,8 @@ class TestPromptBoundaries:
         assert "去掉来源限制、补充动作同义词" in prompts.REFLECTION_SYSTEM
         assert "只在无关主题中偶然命中关键词的记录不是核心证据" in prompts.REFLECTION_SYSTEM
         assert "不得要求用户提供公开身份、官网、文档或链接" in prompts.REFLECTION_SYSTEM
+        assert "首段必须交代关键分支及各自适用条件" in prompts.REFLECTION_SYSTEM
+        assert "把更普遍的分支埋到后文" in prompts.REFLECTION_SYSTEM
         assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
         assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
 
@@ -2336,6 +2338,10 @@ class TestPromptBoundaries:
         assert "不要用与核心交付物无关的证据、通用风险清单" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "不得把公开可检索的对象身份、官网、文档或链接" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "只偶然出现关键词的材料不得作为核心证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "首段同时给出关键分支和选择依据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "限制更少、适用更广的分支" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不得自行补成完整步骤、页面字段、地址、费用或到账流程" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "若存在多个适用条件不同的答案分支" in prompts.ANSWER_COMPOSER_USER
         assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
