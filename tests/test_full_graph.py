@@ -2235,84 +2235,52 @@ class TestFullGraphDebugState:
 class TestPromptBoundaries:
     """关键 prompt 约束测试，防止后续回归到过度检索。"""
 
-    def test_info_gap_prompt_contains_retrieval_boundaries(self):
+    def test_info_gap_prompt_preserves_core_deliverable_and_scope(self):
         from nervos_brain.graph_engine import prompts
 
         assert "retrieval_policy" in prompts.INFO_GAP_SYSTEM
-        assert "什么时候直答" in prompts.INFO_GAP_SYSTEM
-        assert "不要为了显得谨慎而过度检索" in prompts.INFO_GAP_SYSTEM
-        assert "你只做内部路由判断" in prompts.INFO_GAP_SYSTEM
-        assert "info_needs 是给后续检索/回答节点看的内部任务列表" in prompts.INFO_GAP_SYSTEM
-        assert "required=true 是强约束" in prompts.INFO_GAP_SYSTEM
-        assert "公开可检索信息缺口" in prompts.INFO_GAP_SYSTEM
-        assert "只要能通过检索获得，就必须 required=false" in prompts.INFO_GAP_SYSTEM
-        assert "如果你把公开可检索目标标成 required=true" in prompts.INFO_GAP_SYSTEM
-        assert "具体项目、真实案例" in prompts.INFO_GAP_SYSTEM
-        assert "用户不必明说“查资料”" in prompts.INFO_GAP_SYSTEM
-        assert "当前模型上下文之外" in prompts.INFO_GAP_SYSTEM
-        assert "不要用关键词硬编码替代理解" in prompts.INFO_GAP_SYSTEM
-        assert "不要把这类问题只当作主观看法" in prompts.INFO_GAP_SYSTEM
-        assert "不要向用户确认“你是不是想了解/检索 X”" in prompts.INFO_GAP_SYSTEM
-        assert "这是授权你检索，不是让你追问确认" in prompts.INFO_GAP_SYSTEM
-        assert "不要再追问" in prompts.INFO_GAP_SYSTEM
-        assert "答非所问" in prompts.INFO_GAP_SYSTEM
-        assert "数据库或知识库里有没有" in prompts.INFO_GAP_SYSTEM
-        assert "凭什么说有" in prompts.INFO_GAP_SYSTEM
-        assert "必须检索后用证据回答" in prompts.INFO_GAP_SYSTEM
-        assert "技术教程、最简可运行代码" in prompts.INFO_GAP_SYSTEM
-        assert "为什么不用 CCC" in prompts.INFO_GAP_SYSTEM
-        assert "小白/萌新/刚上手" in prompts.INFO_GAP_SYSTEM
+        assert "对象、用户要完成的动作、期望交付物和显式范围" in prompts.INFO_GAP_SYSTEM
+        assert "只提高查证强度，不自动增加" in prompts.INFO_GAP_SYSTEM
+        assert "每个 info_need 都必须能说明它如何帮助完成核心交付物" in prompts.INFO_GAP_SYSTEM
+        assert "公开身份、公开版本、公开文档、公开渠道" in prompts.INFO_GAP_SYSTEM
+        assert "大多数单一事实、入口、资料、用法和当前状态问题使用 single" in prompts.INFO_GAP_SYSTEM
+        assert "不要按实体名、领域关键词或用户要求“详细”机械升档" in prompts.INFO_GAP_SYSTEM
+        assert "旧答案和背景不是新的任务清单" in prompts.INFO_GAP_SYSTEM
         assert "主动检索不等于多轮深检索" in prompts.INFO_GAP_SYSTEM
-        assert "有没有比较靠谱的资料可以看" in prompts.INFO_GAP_SYSTEM
-        assert "不要串到旧上下文" in prompts.INFO_GAP_SYSTEM
 
-    def test_retriever_planner_prompt_prefers_unified_search(self):
+    def test_retriever_planner_prompt_prioritizes_answer_bearing_evidence(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "统一知识库" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "统一多库检索入口" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "默认不要加 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "直接填入最终答案的事实" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "对象 + 用户动作 + 期望结果" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不扩大核心交付物的范围" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "已有证据足以完成核心交付物时停止" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "默认不加 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "{retrieval_policy}" in prompts.RETRIEVER_PLANNER_USER
-        assert "先统一 qdrant_search" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "TS/JS CKB transfer CCC" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要写“请检索/需要检索/帮助用户理解”这种指令腔" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "评价、判断或分析某个真实对象" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "必须默认只生成 1 个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要把历史错误回答、用户纠错语气、内部评测描述或整段对话塞进 query" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "普通概念、学习路线、资料推荐不要生成 regex" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "默认只生成一个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不复制整段对话、纠错语气或内部评测描述" in prompts.RETRIEVER_PLANNER_SYSTEM
 
-    def test_reflection_prompt_avoids_vague_extra_loops(self):
+    def test_reflection_prompt_treats_buried_answer_as_functional_failure(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "不要因为泛泛的不确定性继续检索" in prompts.REFLECTION_SYSTEM
+        assert "第一优先级是任务完成度" in prompts.REFLECTION_SYSTEM
+        assert "首段没有直接完成用户请求" in prompts.REFLECTION_SYSTEM
+        assert "关键结论被背景埋没" in prompts.REFLECTION_SYSTEM
+        assert "属于范围漂移，不是单纯“可以更精炼”" in prompts.REFLECTION_SYSTEM
+        assert "已有直接证据时应 accept_answer" in prompts.REFLECTION_SYSTEM
+        assert "不要为了更多背景、来源数量或边际完整性继续检索" in prompts.REFLECTION_SYSTEM
+        assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
         assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
-        assert "不要让 ask_user 节点把检索目标复述给用户" in prompts.REFLECTION_SYSTEM
-        assert "不要输出“为了准确回答，我先确认一下" in prompts.REFLECTION_SYSTEM
-        assert "大概示例/伪代码/骨架/不要再追问" in prompts.REFLECTION_SYSTEM
-        assert "公开可检索缺口" in prompts.REFLECTION_SYSTEM
-        assert "如果 info_needs 中 required=true 的内容看起来其实是公开资料检索目标" in prompts.REFLECTION_SYSTEM
-        assert "不要再确认意图" in prompts.REFLECTION_SYSTEM
-        assert "公开资料版本冲突" in prompts.REFLECTION_SYSTEM
-        assert "我是萌新/小白/你自己决定/按你推荐的来" in prompts.REFLECTION_SYSTEM
-        assert "默认 testnet" in prompts.REFLECTION_SYSTEM
-        assert "不要用 ask_user 处理公开资料缺口" in prompts.REFLECTION_SYSTEM
-        assert "超过目标耗时" in prompts.REFLECTION_SYSTEM
-        assert "Go SDK" in prompts.REFLECTION_SYSTEM
-        assert "全部写成未实现 TODO" in prompts.REFLECTION_SYSTEM
-        assert "你发明了不能用的方法" in prompts.REFLECTION_SYSTEM
-        assert "想要更完整或想要更多来源" in prompts.REFLECTION_SYSTEM
-        assert "答案方向正确但不够完美" in prompts.REFLECTION_SYSTEM
-        assert "不要触发第二次 answer_composer" in prompts.REFLECTION_SYSTEM
 
     def test_model_router_prompt_uses_low_medium_and_high(self):
         from nervos_brain.graph_engine import full_nodes
 
         assert "不要过度省模型，也不要过度升档" in full_nodes._LLM_ROUTER_SYSTEM
         assert "low、medium、high 三档之一" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "不要默认升 medium/high" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "草稿是否把 A 项目证据泛化到 B 项目" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "普通资料推荐、学习路线、覆盖情况说明应避免 high" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "不按领域名称、实体名称或用户要求“详细”机械升档" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "证据被错误泛化" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "证据数量多但核心答案简单时不应升档" in full_nodes._LLM_ROUTER_SYSTEM
         assert "主动选择更快档位" in full_nodes._LLM_ROUTER_SYSTEM
         assert full_nodes._MODEL_TIERS == {"low", "medium", "high"}
         assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "low"
@@ -2321,50 +2289,83 @@ class TestPromptBoundaries:
         assert full_nodes._NODE_FALLBACK_TIERS["reflection_post"] == "medium"
         assert full_nodes._NODE_FALLBACK_TIERS["direct_answer"] == "low"
 
-    def test_answer_composer_prompt_prioritizes_current_question_and_allows_examples(self):
+    def test_answer_composer_prompt_leads_with_deliverable_and_limits_scope(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "当前用户问题优先级最高" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要回答旧问题" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "教学性示例代码" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "占位函数或 TODO" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "现成框架" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "私钥、RPC URL、接收地址、金额" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Go-only evidence" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "每条包含名称、它是什么、为什么相关、链接/引用" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Talk/forum" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "默认回答要短、贴题、先给可执行主线" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "资料推荐 / 靠谱资料 / 从哪里开始" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "第一段直接交付用户要的结果" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "再按对核心交付物的帮助程度" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不意味着输出所有检索结果" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "未用于完成核心交付物的证据不写入正文" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "先短后详，但不使用僵硬的固定模板" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "禁止重复结论、重复总结、装饰性章节" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要直接输出最终引用编号" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要把答案扩写成完整大教程" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
 
-    def test_direct_answer_prompt_defers_project_and_source_requests_to_retrieval(self):
+    @pytest.mark.parametrize(
+        ("task_kind", "contract_fragment"),
+        [
+            ("action_or_channel", "可执行结果或入口"),
+            ("api_or_command", "正确的接口或命令"),
+            ("comparison", "比较结论或决策依据"),
+            ("troubleshooting", "最可能原因和下一步"),
+            ("explicit_full_investigation", "全面调查或完整报告"),
+        ],
+    )
+    def test_answer_composer_generic_task_matrix(self, task_kind, contract_fragment):
+        from nervos_brain.graph_engine import prompts
+
+        assert task_kind
+        assert contract_fragment in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不要套用固定模板" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "仍应在开头交付最重要的结果" in prompts.ANSWER_COMPOSER_SYSTEM
+
+    def test_direct_answer_prompt_reanswers_corrections_instead_of_promising(self):
         from nervos_brain.graph_engine import prompts
 
         assert "不追加参考来源" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "直观类比或假想例子" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "真实项目、链接、来源" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "不要把内部流程说给用户听" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "直接给有用的骨架" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "立即给出修正后的答案" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "不要只回复“明白、以后会注意”" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "不要因为用户要求详细而扩展到未请求的主题" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "不得编造" in prompts.DIRECT_ANSWER_SYSTEM
+
+    def test_runtime_prompts_do_not_embed_regression_specific_rules(self):
+        from nervos_brain.graph_engine import full_nodes, prompts
+
+        runtime_prompts = "\n".join(
+            [
+                prompts.INFO_GAP_SYSTEM,
+                prompts.RETRIEVER_PLANNER_SYSTEM,
+                prompts.REFLECTION_SYSTEM,
+                prompts.ANSWER_COMPOSER_SYSTEM,
+                prompts.DIRECT_ANSWER_SYSTEM,
+                full_nodes._LLM_ROUTER_SYSTEM,
+            ]
+        )
+        forbidden = (
+            "USDI",
+            "DestBridge",
+            "Fiber",
+            "CCC",
+            "open_channel",
+            "TS/JS",
+            "Go SDK",
+            "Spore",
+            "RGB++",
+        )
+        assert all(term not in runtime_prompts for term in forbidden)
 
     def test_financial_guidance_prompts_refuse_price_predictions(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "Common Knowledge Base" in prompts.INFO_GAP_SYSTEM
-        assert "CKByte" in prompts.INFO_GAP_SYSTEM
-        assert "不得因为出现 CKB" in prompts.INFO_GAP_SYSTEM
         assert "价格预测" in prompts.INFO_GAP_SYSTEM
         assert "目标价" in prompts.INFO_GAP_SYSTEM
-        assert "买入/卖出/持有" in prompts.INFO_GAP_SYSTEM
-        assert "中立数据来源" in prompts.INFO_GAP_SYSTEM
-        assert "CKByte capacity" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "中立或技术解释" in prompts.REFLECTION_SYSTEM
-        assert "中立或技术问题" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "中立或技术问题" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "not financial advice" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "not financial advice" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "买入、卖出、持仓" in prompts.INFO_GAP_SYSTEM
+        assert "中立事实、技术风险或公开数据来源" in prompts.INFO_GAP_SYSTEM
+        assert "不要为价格预测、目标价或交易决策生成检索计划" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "金融安全边界必须保持" in prompts.REFLECTION_SYSTEM
+        assert "免责声明不能绕过该限制" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "免责声明不能绕过该限制" in prompts.DIRECT_ANSWER_SYSTEM
 
 
 class TestFinancialGuidanceGuard:
