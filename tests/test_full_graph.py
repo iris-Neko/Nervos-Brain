@@ -2276,6 +2276,9 @@ class TestPromptBoundaries:
         assert "不要只是重复翻译或改写用户原始动词" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "属于召回后的证据判断" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不要把这类评价词或答案字段加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "4 到 8 个独立检索词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "交付格式词、参数字段和重复同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "最多两个非重复动作同义词" in prompts.RETRIEVER_PLANNER_USER
         assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
