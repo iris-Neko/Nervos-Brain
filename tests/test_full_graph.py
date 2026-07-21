@@ -2307,6 +2307,7 @@ class TestPromptBoundaries:
         assert "不得要求用户提供公开身份、官网、文档或链接" in prompts.REFLECTION_SYSTEM
         assert "首段必须交代关键分支及各自适用条件" in prompts.REFLECTION_SYSTEM
         assert "把更普遍的分支埋到后文" in prompts.REFLECTION_SYSTEM
+        assert "可执行结果 + 证据边界" in prompts.REFLECTION_SYSTEM
         assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
         assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
 
@@ -2341,6 +2342,9 @@ class TestPromptBoundaries:
         assert "首段同时给出关键分支和选择依据" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "限制更少、适用更广的分支" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "不得自行补成完整步骤、页面字段、地址、费用或到账流程" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不得把局部不确定性改写成“没有结果”" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不构成它不存在的证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不要只写无法确认" in prompts.ANSWER_COMPOSER_USER
         assert "若存在多个适用条件不同的答案分支" in prompts.ANSWER_COMPOSER_USER
         assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
