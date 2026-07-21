@@ -2269,6 +2269,8 @@ class TestPromptBoundaries:
         assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "默认只为核心对象保留一个最有区分度的 regex_query" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不要为动作、期望结果、常见类别词" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "{retrieval_policy}" in prompts.RETRIEVER_PLANNER_USER
         assert "默认只生成一个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
@@ -2284,6 +2286,7 @@ class TestPromptBoundaries:
         assert "已有直接证据时应 accept_answer" in prompts.REFLECTION_SYSTEM
         assert "不要为了更多背景、来源数量或边际完整性继续检索" in prompts.REFLECTION_SYSTEM
         assert "去掉来源限制、补充动作同义词" in prompts.REFLECTION_SYSTEM
+        assert "只在无关主题中偶然命中关键词的记录不是核心证据" in prompts.REFLECTION_SYSTEM
         assert "不得要求用户提供公开身份、官网、文档或链接" in prompts.REFLECTION_SYSTEM
         assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
         assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
@@ -2315,6 +2318,7 @@ class TestPromptBoundaries:
         assert "禁止重复结论、重复总结、装饰性章节" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "不要用与核心交付物无关的证据、通用风险清单" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "不得把公开可检索的对象身份、官网、文档或链接" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "只偶然出现关键词的材料不得作为核心证据" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
