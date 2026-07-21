@@ -2259,7 +2259,7 @@ class TestPromptBoundaries:
         from nervos_brain.graph_engine import prompts
 
         assert "直接填入最终答案的事实" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "对象 + 用户动作 + 期望结果" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "核心对象 + 用户原始动作 + 期望结果" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不扩大核心交付物的范围" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "已有证据足以完成核心交付物时停止" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "默认不加 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
@@ -2271,7 +2271,11 @@ class TestPromptBoundaries:
         assert "输出前硬性检查" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不要使用 info_needs、rationale 或你自己的来源偏好" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "只有用户原始问题明确限定资料库或来源类型" in prompts.RETRIEVER_PLANNER_USER
-        assert "一到两个最可能出现在资料里的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "一到两个检索所需的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不同领域术语" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不要只是重复翻译或改写用户原始动词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "属于召回后的证据判断" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不要把这类评价词或答案字段加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
