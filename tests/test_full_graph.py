@@ -2251,6 +2251,8 @@ class TestPromptBoundaries:
         assert "步骤、参数、条件和限制属于同一事实簇" in prompts.INFO_GAP_SYSTEM
         assert "默认生成一个综合 info_need" in prompts.INFO_GAP_SYSTEM
         assert "预估可能需要多条证据不等于多个独立交付物" in prompts.INFO_GAP_SYSTEM
+        assert "从 info_needs 中删除对象身份、发行主体、术语定义和历史背景子句" in prompts.INFO_GAP_SYSTEM
+        assert "用户已经提供的对象说明默认用于消歧" in prompts.INFO_GAP_USER
         assert "不要按实体名、领域关键词或用户要求“详细”机械升档" in prompts.INFO_GAP_SYSTEM
         assert "旧答案和背景不是新的任务清单" in prompts.INFO_GAP_SYSTEM
         assert "主动检索不等于多轮深检索" in prompts.INFO_GAP_SYSTEM
@@ -2278,6 +2280,8 @@ class TestPromptBoundaries:
         assert "不要把这类评价词或答案字段加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "4 到 8 个独立检索词" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "交付格式词、参数字段和重复同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不得把对象身份、发行主体、定义或历史背景加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "删除与核心交付物无关的身份、发行主体、定义、历史" in prompts.RETRIEVER_PLANNER_USER
         assert "最多两个非重复动作同义词" in prompts.RETRIEVER_PLANNER_USER
         assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
