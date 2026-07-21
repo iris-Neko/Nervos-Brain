@@ -2242,7 +2242,10 @@ class TestPromptBoundaries:
         assert "对象、用户要完成的动作、期望交付物和显式范围" in prompts.INFO_GAP_SYSTEM
         assert "只提高查证强度，不自动增加" in prompts.INFO_GAP_SYSTEM
         assert "每个 info_need 都必须能说明它如何帮助完成核心交付物" in prompts.INFO_GAP_SYSTEM
+        assert "对象说明是检索上下文" in prompts.INFO_GAP_SYSTEM
+        assert "不自动产生“重新鉴定对象身份”的调查维度" in prompts.INFO_GAP_SYSTEM
         assert "公开身份、公开版本、公开文档、公开渠道" in prompts.INFO_GAP_SYSTEM
+        assert "证据不足或来源冲突都不等于缺少用户私有信息" in prompts.INFO_GAP_SYSTEM
         assert "大多数单一事实、入口、资料、用法和当前状态问题使用 single" in prompts.INFO_GAP_SYSTEM
         assert "不要按实体名、领域关键词或用户要求“详细”机械升档" in prompts.INFO_GAP_SYSTEM
         assert "旧答案和背景不是新的任务清单" in prompts.INFO_GAP_SYSTEM
@@ -2256,6 +2259,11 @@ class TestPromptBoundaries:
         assert "不扩大核心交付物的范围" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "已有证据足以完成核心交付物时停止" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "默认不加 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "证据质量，不是资料库或来源类型" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "filters 必须为 `{}`" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不得根据期望的权威性推导 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "一到两个最可能出现在资料里的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "{retrieval_policy}" in prompts.RETRIEVER_PLANNER_USER
         assert "默认只生成一个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
@@ -2270,6 +2278,8 @@ class TestPromptBoundaries:
         assert "属于范围漂移，不是单纯“可以更精炼”" in prompts.REFLECTION_SYSTEM
         assert "已有直接证据时应 accept_answer" in prompts.REFLECTION_SYSTEM
         assert "不要为了更多背景、来源数量或边际完整性继续检索" in prompts.REFLECTION_SYSTEM
+        assert "去掉来源限制、补充动作同义词" in prompts.REFLECTION_SYSTEM
+        assert "不得要求用户提供公开身份、官网、文档或链接" in prompts.REFLECTION_SYSTEM
         assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
         assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
 
@@ -2298,6 +2308,8 @@ class TestPromptBoundaries:
         assert "未用于完成核心交付物的证据不写入正文" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "先短后详，但不使用僵硬的固定模板" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "禁止重复结论、重复总结、装饰性章节" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不要用与核心交付物无关的证据、通用风险清单" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "不得把公开可检索的对象身份、官网、文档或链接" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
