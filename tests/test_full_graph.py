@@ -2246,6 +2246,7 @@ class TestPromptBoundaries:
         assert "不自动产生“重新鉴定对象身份”的调查维度" in prompts.INFO_GAP_SYSTEM
         assert "公开身份、公开版本、公开文档、公开渠道" in prompts.INFO_GAP_SYSTEM
         assert "证据不足或来源冲突都不等于缺少用户私有信息" in prompts.INFO_GAP_SYSTEM
+        assert "不得自行加入 source_preference" in prompts.INFO_GAP_SYSTEM
         assert "大多数单一事实、入口、资料、用法和当前状态问题使用 single" in prompts.INFO_GAP_SYSTEM
         assert "步骤、参数、条件和限制属于同一事实簇" in prompts.INFO_GAP_SYSTEM
         assert "默认生成一个综合 info_need" in prompts.INFO_GAP_SYSTEM
@@ -2265,6 +2266,11 @@ class TestPromptBoundaries:
         assert "证据质量，不是资料库或来源类型" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "filters 必须为 `{}`" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不得根据期望的权威性推导 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "官方渠道、官方入口、官方说明" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "模型自行生成的来源偏好也不能授权 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "输出前硬性检查" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "不要使用 info_needs、rationale 或你自己的来源偏好" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "只有用户原始问题明确限定资料库或来源类型" in prompts.RETRIEVER_PLANNER_USER
         assert "一到两个最可能出现在资料里的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
