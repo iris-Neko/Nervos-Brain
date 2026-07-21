@@ -2247,6 +2247,9 @@ class TestPromptBoundaries:
         assert "公开身份、公开版本、公开文档、公开渠道" in prompts.INFO_GAP_SYSTEM
         assert "证据不足或来源冲突都不等于缺少用户私有信息" in prompts.INFO_GAP_SYSTEM
         assert "大多数单一事实、入口、资料、用法和当前状态问题使用 single" in prompts.INFO_GAP_SYSTEM
+        assert "步骤、参数、条件和限制属于同一事实簇" in prompts.INFO_GAP_SYSTEM
+        assert "默认生成一个综合 info_need" in prompts.INFO_GAP_SYSTEM
+        assert "预估可能需要多条证据不等于多个独立交付物" in prompts.INFO_GAP_SYSTEM
         assert "不要按实体名、领域关键词或用户要求“详细”机械升档" in prompts.INFO_GAP_SYSTEM
         assert "旧答案和背景不是新的任务清单" in prompts.INFO_GAP_SYSTEM
         assert "主动检索不等于多轮深检索" in prompts.INFO_GAP_SYSTEM
@@ -2263,6 +2266,8 @@ class TestPromptBoundaries:
         assert "filters 必须为 `{}`" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "不得根据期望的权威性推导 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "一到两个最可能出现在资料里的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "{retrieval_policy}" in prompts.RETRIEVER_PLANNER_USER
