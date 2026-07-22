@@ -2371,6 +2371,11 @@ class TestPromptBoundaries:
     def test_direct_answer_prompt_reanswers_corrections_instead_of_promising(self):
         from nervos_brain.graph_engine import prompts
 
+        for prompt in (prompts.DIRECT_ANSWER_SYSTEM, prompts.ANSWER_COMPOSER_SYSTEM):
+            assert "user-facing assistant named Nervos Brain" in prompt
+            assert "commonly abbreviated" in prompt
+            assert "Do not identify yourself as Codex, ChatGPT, GPT, OpenAI" in prompt
+            assert "distinguish the Nervos Brain product" in prompt
         assert "Do not add references" in prompts.DIRECT_ANSWER_SYSTEM
         assert "immediately give the corrected answer" in prompts.DIRECT_ANSWER_SYSTEM
         assert "reply only with" in prompts.DIRECT_ANSWER_SYSTEM
