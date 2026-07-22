@@ -21,9 +21,10 @@ SOURCES: dict[str, RetrievalSource] = {
         label="official docs and GitHub repository documents",
         tool_hint="qdrant_search",
         description=(
-            "官方文档、docs.nervos.org、RFC、CKB/CCC/Fiber 仓库 README、SDK 文档、"
-            "教程、协议规范和仓库内说明。用户问官方教程、入门路径、概念解释、"
-            "规范或文档链接时优先使用。"
+            "Official documentation, docs.nervos.org, RFCs, CKB/CCC/Fiber repository READMEs, "
+            "SDK documentation, tutorials, protocol specifications, and repository notes. "
+            "Prefer this source for official tutorials, onboarding paths, concept explanations, "
+            "specifications, and documentation links."
         ),
         topic_examples=(
             "nervosnetwork/docs.nervos.org",
@@ -39,9 +40,10 @@ SOURCES: dict[str, RetrievalSource] = {
         label="GitHub source code, config files, and executable examples",
         tool_hint="github_search",
         description=(
-            "Nervos 相关 GitHub 仓库源码、配置、脚本、函数、类型、模块、测试、"
-            "SDK 示例代码和可执行调用方式。用户问源码位置、函数/类/命令实现、"
-            "配置项、调用链、报错对应代码或具体代码片段时优先使用。"
+            "Nervos-related GitHub repository source code, configuration, scripts, functions, "
+            "types, modules, tests, SDK examples, and executable call patterns. Prefer this "
+            "source for source locations, function/class/command implementations, configuration "
+            "options, call chains, code related to an error, and concrete code snippets."
         ),
         topic_examples=(
             "nervosnetwork/ckb",
@@ -56,9 +58,10 @@ SOURCES: dict[str, RetrievalSource] = {
         label="Nervos Talk forum posts and replies",
         tool_hint="discourse_query",
         description=(
-            "Nervos Talk 论坛帖子、回复、社区讨论、Spark/grant/proposal、生态项目介绍、"
-            "真实案例、项目列表、社区评价和路线争议。用户问社区有没有、项目案例、"
-            "讨论链接、谁在做、可以看看什么时优先使用 discourse_query。"
+            "Nervos Talk forum posts, replies, community discussions, Spark/grant/proposal "
+            "threads, ecosystem project introductions, real cases, project lists, community "
+            "opinions, and roadmap disputes. Prefer discourse_query for community availability, "
+            "project cases, discussion links, who is working on something, and related examples."
         ),
         topic_examples=("nervos_talk:<topic_id>",),
     ),
@@ -104,19 +107,23 @@ QDRANT_FILTER_KEYS = {
 
 def format_source_registry_for_prompt() -> str:
     lines = [
-        "合法 source 只能使用下面这些精确值；不要自造 official_docs/docs/documentation 等 source："
+        "The source field may use only these exact values. Do not invent aliases such as "
+        "official_docs, docs, or documentation:"
     ]
     for source in SOURCES.values():
-        topics = ", ".join(source.topic_examples) if source.topic_examples else "(无)"
+        topics = ", ".join(source.topic_examples) if source.topic_examples else "(none)"
         lines.append(
             f"- source={source.id}: {source.description} "
-            f"推荐工具: {source.tool_hint}. 常见 topic: {topics}"
+            f"Recommended tool: {source.tool_hint}. Common topics: {topics}"
         )
     lines.append(
-        "qdrant_search.filters 支持字段：source、topic、type/doc_type、version、lang、url、anchor、title、keywords。"
+        "qdrant_search.filters supports: source, topic, type/doc_type, version, lang, url, "
+        "anchor, title, and keywords."
     )
     lines.append(
-        "官方教程/官方文档/入门资料应使用 source=github_docs；源码/函数/配置/代码片段应使用 source=github_code 或 github_search；社区讨论/项目案例优先使用 discourse_query。"
+        "Use source=github_docs for official tutorials, official documentation, and onboarding "
+        "material; source=github_code or github_search for source code, functions, configuration, "
+        "and code snippets; and discourse_query for community discussions and project cases."
     )
     return "\n".join(lines)
 

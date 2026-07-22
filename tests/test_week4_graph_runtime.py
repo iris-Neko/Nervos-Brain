@@ -316,7 +316,7 @@ def test_info_gap_assessor_discards_stale_checkpoint_for_new_user_question():
     assert result["_route_decision"] == "answer_direct"
     assert result["resolved_question"] == "ckb是什么"
     assert "写一个交易记账app示例吧" not in result["resolved_question"]
-    assert "线程恢复状态" not in captured["user_prompt"]
+    assert "Thread resume state" not in captured["user_prompt"]
     assert memory.completed, "新问题应丢弃旧 pending checkpoint"
 
 

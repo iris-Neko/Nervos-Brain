@@ -571,6 +571,13 @@ def _extract_first_json_object(text: str) -> str | None:
     return None
 
 
+_JSON_ONLY_SYSTEM_SUFFIX = (
+    "Return exactly one JSON object. Do not output a Markdown code block, "
+    "explanation, or any prefix or suffix."
+)
+_JSON_ONLY_USER_SUFFIX = "Return a JSON object only."
+
+
 def call_llm_json(
     system_prompt: str,
     user_prompt: str,
@@ -585,11 +592,11 @@ def call_llm_json(
     """调用 LLM 并解析 JSON 响应。"""
     json_hint_system = (
         f"{system_prompt}\n\n"
-        "你必须只输出一个 JSON 对象，不要输出 markdown 代码块、解释性文本或额外前后缀。"
+        + _JSON_ONLY_SYSTEM_SUFFIX
     )
     json_hint_user = (
         f"{user_prompt}\n\n"
-        "只返回 JSON 对象。"
+        + _JSON_ONLY_USER_SUFFIX
     )
     raw = call_llm(
         json_hint_system,

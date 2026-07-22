@@ -958,11 +958,11 @@ class TelegramPollingGateway:
 
         content = str(envelope.get("content", "") or "").strip()
         if not content and (text_blocks or image_names):
-            content = "请阅读我上传的文件或图片，并根据内容回答。"
+            content = "Read the uploaded files or images and answer based on their contents."
         if text_blocks:
             content = (content + "\n\n" if content else "") + "\n\n".join(text_blocks)
         if image_names:
-            image_note = "用户上传的图片已作为视觉输入传给模型：" + "、".join(image_names)
+            image_note = "The user's uploaded images are provided as visual input: " + ", ".join(image_names)
             content = (content + "\n\n" if content else "") + image_note
         envelope["content"] = content
 
@@ -1035,9 +1035,9 @@ class TelegramPollingGateway:
             attachment["status"] = "decode_failed"
             return
         if len(decoded) > _MAX_TEXT_ATTACHMENT_CHARS:
-            decoded = decoded[:_MAX_TEXT_ATTACHMENT_CHARS].rstrip() + "\n...[文件内容已截断]"
+            decoded = decoded[:_MAX_TEXT_ATTACHMENT_CHARS].rstrip() + "\n...[file content truncated]"
             attachment["truncated"] = "true"
-        text_blocks.append(f"用户上传的文本文件 `{name}` 内容：\n```text\n{decoded}\n```")
+        text_blocks.append(f"Uploaded text file `{name}` contents:\n```text\n{decoded}\n```")
 
     def _attach_recent_memory_context(
         self,
@@ -1756,9 +1756,10 @@ def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
             else:
                 label = "replied_message"
             return (
-                f"当前消息正在回复一条 {label} 消息（message_id={reply_id}），"
-                "但平台没有提供被回复消息内容。不要从普通历史记录猜测被回复内容；"
-                "如果当前短追问无法独立理解，应请用户补充或重发被回复内容。"
+                f"Current message replies to a {label} message (message_id={reply_id}), "
+                "but the platform did not provide the replied message content. Do not guess it "
+                "from ordinary history; if this short follow-up cannot be understood on its own, "
+                "ask the user to provide or resend the replied content."
             )
         return ""
     if len(reply_text) > 700:
@@ -1770,7 +1771,7 @@ def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
         label = "user"
     else:
         label = "replied_message"
-    return f"当前消息正在回复这条 {label} 消息: {reply_text}"
+    return f"Current message replies to this {label} message: {reply_text}"
 
 
 def _preview_text(value: Any, *, limit: int = 300) -> str:

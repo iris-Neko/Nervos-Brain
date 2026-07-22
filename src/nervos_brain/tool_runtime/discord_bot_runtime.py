@@ -449,12 +449,12 @@ class DiscordGateway:
             attachment["status"] = "decode_failed"
             return
         if len(decoded) > _MAX_TEXT_ATTACHMENT_CHARS:
-            decoded = decoded[:_MAX_TEXT_ATTACHMENT_CHARS].rstrip() + "\n...[文件内容已截断]"
+            decoded = decoded[:_MAX_TEXT_ATTACHMENT_CHARS].rstrip() + "\n...[file content truncated]"
             attachment["truncated"] = "true"
         attachment["status"] = "ready"
         attachment["mime_type"] = mime_type
         attachment["file_size"] = str(len(data))
-        text_blocks.append(f"用户上传的文本文件 `{name}` 内容：\n```text\n{decoded}\n```")
+        text_blocks.append(f"Uploaded text file `{name}` contents:\n```text\n{decoded}\n```")
 
     def _attach_recent_memory_context(self, *, state: dict[str, Any], envelope: dict[str, Any]) -> None:
         reply_context = _reply_context_from_envelope(envelope)
@@ -969,16 +969,17 @@ def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
             role = str(envelope.get("reply_to_role", "") or "").strip().lower()
             label = "assistant" if role in {"assistant", "bot"} else "user" if role == "user" else "replied_message"
             return (
-                f"当前消息正在回复一条 {label} 消息（message_id={reply_id}），"
-                "但平台没有提供被回复消息内容。不要从普通历史记录猜测被回复内容；"
-                "如果当前短追问无法独立理解，应请用户补充或重发被回复内容。"
+                f"Current message replies to a {label} message (message_id={reply_id}), "
+                "but the platform did not provide the replied message content. Do not guess it "
+                "from ordinary history; if this short follow-up cannot be understood on its own, "
+                "ask the user to provide or resend the replied content."
             )
         return ""
     if len(reply_text) > 700:
         reply_text = reply_text[:700].rstrip() + "..."
     role = str(envelope.get("reply_to_role", "") or "").strip().lower()
     label = "assistant" if role in {"assistant", "bot"} else "user" if role == "user" else "replied_message"
-    return f"当前消息正在回复这条 {label} 消息: {reply_text}"
+    return f"Current message replies to this {label} message: {reply_text}"
 
 
 def _preview_text(value: Any, *, limit: int = 300) -> str:

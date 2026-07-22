@@ -172,27 +172,44 @@ _NODE_FALLBACK_TIERS = {
     "direct_answer": "low",
     "answer_composer": "medium",
 }
-_LLM_ROUTER_SYSTEM = """你是 Nervos Brain 的模型档位路由器。
-你的唯一任务是为当前 graph 节点选择 low、medium、high 三档之一。
-只根据任务复杂度、风险和节点目标判断模型档位；不要改变 graph 路由、检索策略或回答内容。
+_LLM_ROUTER_SYSTEM = """Prompt ID: model_router
+You are the Nervos Brain model-tier router.
+Your only task is to select one of low, medium, or high for the current graph
+node. Judge only task complexity, risk, and the node goal. Do not change graph
+routing, retrieval policy, or answer content.
 
-档位含义：
-- low: 低风险、局部、判断路径短的任务，例如简短直答、格式转换、结构化分类或证据已经足够的轻量判断。
-- medium: 默认综合档。用于普通技术问答、最终回答生成和需要稳定整合少量证据的任务。
-- high: 深推理档。只用于复杂实现、跨来源冲突、多证据高风险综合、严重偏题复核、复杂排障或安全敏感决策。
+Tier meanings:
+- low: low-risk, local, short-path work such as a short direct answer, format
+  conversion, structured classification, or a light judgment with sufficient
+  evidence.
+- medium: the default general tier for ordinary technical answers, final answer
+  composition, and stable integration of a small amount of evidence.
+- high: deep reasoning for complex implementation, cross-source conflict,
+  high-risk multi-evidence synthesis, severe off-topic review, complex
+  debugging, or safety-sensitive decisions.
 
-选择约束：
-- 不要过度省模型，也不要过度升档。只看本节点需要完成的判断，不按领域名称、实体名称或用户要求“详细”机械升档。
-- info_gap_assessor 和 retriever_planner 默认 low；只有任务结构本身存在冲突、复杂依赖或高风险时才升级。
-- reflection_pre 默认 low；已有证据足以完成核心交付物时，不要为了更多背景选择更高档位。
-- reflection_post 通常 medium；只有严重引用错配、证据被错误泛化、无证据断言或明显范围漂移时才选 high。
-- answer_composer 默认 medium；只有复杂实现、多来源冲突或安全敏感方案才选 high。证据数量多但核心答案简单时不应升档。
-- direct_answer 默认 low；只有当前请求本身需要复杂推理或存在高风险边界时才升级。
-- time_budget 接近或超过目标时，主动选择更快档位，优先完成核心交付物，不用高推理换取边际完整性。
-- high 是例外档，不用于纯格式修复、短追问、资料列表或已有证据充分的简单综合。
+Selection constraints:
+- Do not underspend or overspend model capacity. Judge only what this node
+  must decide; do not upgrade based on a domain name, entity name, or request
+  for detail.
+- info_gap_assessor and retriever_planner default to low. Upgrade only when
+  the task structure has conflict, complex dependencies, or high risk.
+- reflection_pre defaults to low. Do not use a higher tier for more background
+  when existing evidence already completes the core deliverable.
+- reflection_post is usually medium. Use high only for severe citation mismatch,
+  incorrect evidence generalization, unsupported claims, or obvious scope drift.
+- answer_composer defaults to medium. Use high only for complex implementation,
+  multi-source conflict, or safety-sensitive plans. Many evidence items do not
+  require a higher tier when the core answer is simple.
+- direct_answer defaults to low. Upgrade only when the request itself needs
+  complex reasoning or has a high-risk boundary.
+- Near or beyond the time target, choose a faster tier and complete the core
+  deliverable instead of using deep reasoning for marginal completeness.
+- high is exceptional; do not use it for format repair, short follow-ups, lists
+  of resources, or simple synthesis with sufficient evidence.
 
-必须只输出 JSON：
-{"tier":"low|medium|high","reasoning":"一句话说明","confidence":0.0}
+Return JSON only:
+{"tier":"low|medium|high","reasoning":"brief reason","confidence":0.0}
 """
 
 
@@ -338,13 +355,13 @@ def _time_budget_prompt(state: dict) -> str:
     target = snap["target_elapsed_ms"]
     max_ms = snap["max_elapsed_ms"]
     if target <= 0 and max_ms <= 0:
-        return "未设置硬性耗时预算；仍应避免不必要的检索、反思和改写。"
+        return "No hard time budget is set; still avoid unnecessary retrieval, reflection, and rewriting."
     return (
-        f"已用 {snap['elapsed_ms']}ms；"
-        f"目标耗时 {target or '未设置'}ms，目标剩余 {snap['remaining_target_ms']}ms；"
-        f"最大耗时 {max_ms or '未设置'}ms，最大剩余 {snap['remaining_max_ms']}ms。"
-        "如果剩余时间较少，请优先基于已有信息给出准确、简洁、带边界说明的回答，"
-        "避免额外检索、反思或重写。"
+        f"Elapsed {snap['elapsed_ms']}ms; "
+        f"target {target or 'unset'}ms, target remaining {snap['remaining_target_ms']}ms; "
+        f"maximum {max_ms or 'unset'}ms, maximum remaining {snap['remaining_max_ms']}ms. "
+        "When little time remains, prioritize an accurate concise answer with its evidence boundary "
+        "and avoid additional retrieval, reflection, or rewriting."
     )
 
 
@@ -891,13 +908,13 @@ def _router_llm_row(
 
 def _node_goal(node_name: str) -> str:
     return {
-        "info_gap_assessor": "判断是否直答、检索或追问用户，并给出检索策略。",
-        "retriever_planner": "把信息需求转成最小必要检索计划。",
-        "reflection_pre": "判断现有证据是否足够回答核心问题。",
-        "reflection_post": "检查回答草稿是否正确、引用是否匹配、是否需要重写。",
-        "direct_answer": "直接回答低风险问题，不依赖引用。",
-        "answer_composer": "基于证据和上下文生成最终回答。",
-    }.get(node_name, "执行当前 full graph 节点任务。")
+        "info_gap_assessor": "Decide whether to answer directly, retrieve, or ask the user, and choose a retrieval policy.",
+        "retriever_planner": "Convert information needs into the smallest necessary retrieval plan.",
+        "reflection_pre": "Decide whether current evidence is sufficient for the core question.",
+        "reflection_post": "Check whether the draft is correct, citations match, and rewriting is needed.",
+        "direct_answer": "Answer a low-risk question directly without citations.",
+        "answer_composer": "Generate the final answer from evidence and context.",
+    }.get(node_name, "Execute the current full graph node task.")
 
 
 def _thread_key_from_context(context: dict[str, str]) -> dict[str, str] | None:
@@ -944,7 +961,7 @@ def _load_recent_messages(state: dict) -> list[dict[str, Any]]:
 
 def _format_conversation_context(messages: list[dict[str, Any]], *, limit_chars: int = 1800) -> str:
     if not messages:
-        return "(无)"
+        return "(none)"
     lines: list[str] = []
     for msg in messages:
         role = str(msg.get("role", "message") or "message")
@@ -954,7 +971,7 @@ def _format_conversation_context(messages: list[dict[str, Any]], *, limit_chars:
         if len(content) > 220:
             content = content[:220].rstrip() + "..."
         lines.append(f"{role}: {content}")
-    text = "\n".join(lines).strip() or "(无)"
+    text = "\n".join(lines).strip() or "(none)"
     if len(text) > limit_chars:
         text = text[-limit_chars:].lstrip()
     return text
@@ -1005,12 +1022,13 @@ def _looks_like_self_contained_question(question: str) -> bool:
 def _conversation_context_from_state(state: dict) -> str:
     existing = str(state.get("conversation_context", "") or "").strip()
     question = _question_from_user_message(state)
-    if existing and existing.startswith("当前消息正在回复"):
+    if existing and existing.startswith("Current message replies"):
         return existing
     if _looks_like_self_contained_question(question):
         return (
-            "上下文门控: 当前用户问题看起来是完整独立问题。"
-            "普通最近历史只可用于代词/省略消解，不得改变检索目标、回答主题或证据组织。"
+            "Context gate: the current user question appears self-contained. "
+            "Ordinary recent history may resolve pronouns or omissions only; it "
+            "must not change the retrieval target, answer topic, or evidence organization."
         )
     if existing:
         return existing
@@ -1120,7 +1138,7 @@ def _merge_checkpoint_question(question: str, checkpoint: dict[str, object] | No
         return origin
     if origin in text or text in origin:
         return text if len(text) >= len(origin) else origin
-    return f"{origin}\n用户补充: {text}"
+    return f"{origin}\nUser supplement: {text}"
 
 
 def _looks_like_new_user_intent(text: str) -> bool:
@@ -1219,7 +1237,7 @@ def _resume_info_needs(info_needs: list[dict]) -> list[dict]:
     return [
         {
             "kind": "concept_gap",
-            "question": "用户已补充参数，继续检索与回答",
+            "question": "The user supplied the missing parameters; continue retrieval and answer composition.",
             "required": False,
         }
     ]
@@ -1372,6 +1390,7 @@ def info_gap_assessor(state: dict) -> dict:
 
     user_prompt = prompts.INFO_GAP_USER.format(
         question=question,
+        locale=str(state.get("locale", "zh-CN")),
         conversation_context=conversation_context,
         memory_facts=json.dumps(facts, ensure_ascii=False, default=str)[:500],
         evidence_count=len(evidence),
@@ -1387,7 +1406,7 @@ def info_gap_assessor(state: dict) -> dict:
         if isinstance(context_payload, dict) and context_payload:
             thread_state["context_payload"] = context_payload
         user_prompt += (
-            "\n线程恢复状态: "
+            "\nThread resume state: "
             + json.dumps(thread_state, ensure_ascii=False)
         )
 
@@ -1441,7 +1460,7 @@ def info_gap_assessor(state: dict) -> dict:
             info_needs = [
                 {
                     "kind": "concept_gap",
-                    "question": "需要先检索相关资料后再回答",
+                    "question": "Retrieve the relevant public material before answering.",
                     "required": False,
                 }
             ]
@@ -1506,7 +1525,7 @@ def retriever_planner(state: dict) -> dict:
         time_budget=_time_budget_prompt(state),
     )
     if facts:
-        user_prompt += "\n可用记忆事实:\n" + json.dumps(facts, ensure_ascii=False, default=str)[:800]
+        user_prompt += "\nAvailable memory facts:\n" + json.dumps(facts, ensure_ascii=False, default=str)[:800]
 
     profile = _select_model_profile(
         state,
@@ -1516,7 +1535,7 @@ def retriever_planner(state: dict) -> dict:
     )
     planner_system_prompt = (
         prompts.RETRIEVER_PLANNER_SYSTEM
-        + "\n\n可用 source registry:\n"
+        + "\n\nAvailable source registry:\n"
         + format_source_registry_for_prompt()
     )
     try:
@@ -1849,22 +1868,22 @@ def evidence_merger(state: dict) -> dict:
 
 def _stage_label(stage: str) -> str:
     if stage == "post_answer":
-        return "自检"
-    return "证据评分"
+        return "post-answer review"
+    return "pre-answer evidence review"
 
 
 def _summarize_evidence(evidence: list[dict]) -> str:
     return "\n".join(
         f"- [{e.get('source', '?')}] {e.get('title', '?')}: {e.get('snippet', '')[:200]}"
         for e in evidence[:10]
-    ) or "(无证据)"
+    ) or "(no evidence)"
 
 
 def _summarize_conflicts(conflicts: list[dict]) -> str:
     return "\n".join(
         f"- {c.get('a_id', '?')} vs {c.get('b_id', '?')}: {c.get('reason', '?')}"
         for c in conflicts
-    ) or "(无冲突)"
+    ) or "(no conflicts)"
 
 
 def _summarize_citations(citations: list[dict]) -> str:
@@ -1872,7 +1891,7 @@ def _summarize_citations(citations: list[dict]) -> str:
         f"{c.get('label', '?')}: {c.get('title', '?')} ({c.get('url', '')})"
         for c in citations[:10]
         if isinstance(c, dict)
-    ) or "(无引用)"
+    ) or "(no citations)"
 
 
 def _has_reference_section(text: str) -> bool:
@@ -2048,7 +2067,7 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     if req_questions:
         return {
             "decision": "ask_user",
-            "reasoning": "缺少必填参数，先追问用户再继续。",
+            "reasoning": "A required parameter is missing; ask the user before continuing.",
             "uncertainty_score": 0.92,
             "clarify_question": req_questions[0],
             "missing_params": _collect_missing_params(info_needs),
@@ -2057,7 +2076,7 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     if conflicts:
         return {
             "decision": "continue_retrieval",
-            "reasoning": "证据存在公开资料版本冲突，应继续检索或基于现有证据说明边界，不应让用户裁决。",
+            "reasoning": "Public evidence has a version conflict; continue retrieval or state the boundary instead of asking the user to judge it.",
             "uncertainty_score": 0.58,
             "next_query": question,
         }
@@ -2065,7 +2084,7 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     if not evidence:
         return {
             "decision": "continue_retrieval",
-            "reasoning": "暂无证据，继续检索。",
+            "reasoning": "There is no evidence yet; continue retrieval.",
             "uncertainty_score": 0.35,
             "next_query": question,
         }
@@ -2073,16 +2092,30 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     if len(evidence) < 2:
         return {
             "decision": "continue_retrieval",
-            "reasoning": "证据数量偏少，建议补一跳检索。",
+            "reasoning": "Evidence coverage is thin; one additional retrieval hop is appropriate.",
             "uncertainty_score": 0.40,
             "next_query": question,
         }
 
     return {
         "decision": "accept_answer",
-        "reasoning": "证据可支撑回答，进入回答组装。",
+        "reasoning": "The evidence supports an answer; proceed to answer composition.",
         "uncertainty_score": 0.20,
     }
+
+
+def _localized_conflict_question(state: dict) -> str:
+    locale = str(state.get("locale", "zh-CN") or "zh-CN").strip().lower()
+    if locale.startswith("en"):
+        return "Sources disagree. What specific version or scenario are you using?"
+    return "不同来源结论不一致，能否补充你使用的具体版本或场景？"
+
+
+def _localized_uncertainty_question(state: dict) -> str:
+    locale = str(state.get("locale", "zh-CN") or "zh-CN").strip().lower()
+    if locale.startswith("en"):
+        return "The current information is uncertain. Please provide the specific version, environment, or goal."
+    return "当前信息存在不确定性，请补充具体版本、环境或目标。"
 
 
 def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
@@ -2105,46 +2138,46 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
         if text.strip():
             return {
                 "decision": "accept_answer",
-                "reasoning": "低风险直接回答无需引用，可发布。",
+                "reasoning": "The low-risk direct answer needs no citation and can be published.",
                 "uncertainty_score": 0.18,
             }
         return {
             "decision": "revise_answer",
-            "reasoning": "直接回答为空，需重写。",
+            "reasoning": "The direct answer is empty and must be rewritten.",
             "uncertainty_score": 0.85,
-            "revise_instructions": "请给出简洁直接回答，不要编造需要检索的细节。",
+            "revise_instructions": "Give a concise direct answer and do not invent details that require retrieval.",
         }
 
     if isinstance(compose_error, dict):
         return {
             "decision": "revise_answer",
-            "reasoning": "回答生成阶段出现异常，先重试生成。",
+            "reasoning": "Answer generation failed; retry generation first.",
             "uncertainty_score": 0.93,
-            "revise_instructions": "请基于现有证据重新生成完整回答，并确保引用编号正确。",
+            "revise_instructions": "Regenerate the complete answer from the existing evidence and ensure citation labels are correct.",
         }
 
     if text.strip() == _ANSWER_COMPOSER_FALLBACK_TEXT:
         return {
             "decision": "revise_answer",
-            "reasoning": "检测到回答生成失败兜底文案，需要重试回答生成。",
+            "reasoning": "The answer-generation fallback text was detected; retry answer generation.",
             "uncertainty_score": 0.90,
-            "revise_instructions": "请重试回答生成，若失败请给出简短故障说明。",
+            "revise_instructions": "Retry answer generation; if it fails again, give a brief failure explanation.",
         }
 
     if conflicts:
         return {
             "decision": "ask_user",
-            "reasoning": "证据冲突未解，回答难以保证可靠性。",
+            "reasoning": "The evidence conflict is unresolved, so the answer may not be reliable.",
             "uncertainty_score": 0.82,
-            "clarify_question": "不同来源结论不一致，能否补充你使用的具体版本或场景？",
+            "clarify_question": _localized_conflict_question(state),
         }
 
     if not text.strip():
         return {
             "decision": "revise_answer",
-            "reasoning": "回答草稿为空，需重写。",
+            "reasoning": "The answer draft is empty and must be rewritten.",
             "uncertainty_score": 0.90,
-            "revise_instructions": "请给出简洁结论并包含可验证引用。",
+            "revise_instructions": "Give a concise conclusion with verifiable citations.",
         }
 
     labels_in_text = set(re.findall(r"\[\d+\]", text))
@@ -2154,15 +2187,15 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
     if labels_in_text and not labels_in_text.issubset(labels_in_citations):
         return {
             "decision": "revise_answer",
-            "reasoning": "正文引用编号与引用列表不一致。",
+            "reasoning": "Citation labels in the body do not match the citation list.",
             "uncertainty_score": 0.72,
-            "revise_instructions": "修复正文引用编号与 citations 映射关系。",
+            "revise_instructions": "Fix the mapping between citation labels in the body and the citations list.",
         }
 
     if not evidence:
         return {
             "decision": "continue_retrieval",
-            "reasoning": "草稿缺乏证据支撑，回到检索。",
+            "reasoning": "The draft lacks evidence support; return to retrieval.",
             "uncertainty_score": 0.75,
             "next_query": question,
         }
@@ -2170,9 +2203,9 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
     if not citations:
         return {
             "decision": "revise_answer",
-            "reasoning": "回答缺少引用。",
+            "reasoning": "The answer has no citations.",
             "uncertainty_score": 0.60,
-            "revise_instructions": "补全关键断言对应的引用编号。",
+            "revise_instructions": "Add citation labels for the important factual claims.",
         }
 
     max_considered = max(1, min(len(evidence), 10))
@@ -2180,14 +2213,14 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
     if coverage < 0.4:
         return {
             "decision": "revise_answer",
-            "reasoning": "引用覆盖率偏低。",
+            "reasoning": "Citation coverage is too low.",
             "uncertainty_score": 0.55,
-            "revise_instructions": "增加关键断言的引用覆盖率。",
+            "revise_instructions": "Increase citation coverage for the important claims.",
         }
 
     return {
         "decision": "accept_answer",
-        "reasoning": "回答与引用基本一致，可发布。",
+        "reasoning": "The answer and citations are broadly consistent and can be published.",
         "uncertainty_score": 0.18,
     }
 
@@ -2231,6 +2264,7 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
 
     user_prompt = prompts.REFLECTION_USER.format(
         stage=stage,
+        locale=str(state.get("locale", "zh-CN")),
         question=question,
         info_needs=json.dumps(info_needs, ensure_ascii=False, default=str),
         memory_facts=json.dumps(memory_facts, ensure_ascii=False, default=str)[:800],
@@ -2238,7 +2272,7 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
         evidence_summary=_summarize_evidence(evidence),
         conflict_count=len(conflicts),
         conflicts_summary=_summarize_conflicts(conflicts),
-        draft_answer=review_answer[:2400] or "(暂无草稿)",
+        draft_answer=review_answer[:2400] or "(no draft)",
         citations_summary=_summarize_citations(review_citations),
         hop_count=_int_like(state.get("hop_count", 0)),
         reflection_round=reflection_round,
@@ -2315,7 +2349,7 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
             if decision == "continue_retrieval" and not hints.get("next_query"):
                 hints["next_query"] = question
             if not reasoning:
-                reasoning = "没有明确缺少用户私有必填信息，不应追问用户。"
+                reasoning = "No missing required private user information was identified; do not ask the user."
 
     if stage == "post_answer" and decision == "ask_user" and not has_user_required_clarification:
         hints.pop("clarify_question", None)
@@ -2324,13 +2358,13 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
             decision = "revise_answer"
             hints.setdefault(
                 "revise_instructions",
-                "上一版回答没有正确覆盖用户当前问题；请基于当前问题和已有证据重写，不要追问用户。",
+                "The previous answer did not correctly cover the current question. Rewrite it from the current question and evidence; do not ask the user.",
             )
         else:
             decision = "continue_retrieval"
             hints.setdefault("next_query", question)
         if not reasoning:
-            reasoning = "post-answer ask_user 没有用户私有必填信息，改为重写或继续检索。"
+            reasoning = "Post-answer ask_user has no required private user information; rewrite or continue retrieval instead."
 
     # post-answer 若生成器已报错，不能 accept_answer。
     if stage == "post_answer" and (
@@ -2339,8 +2373,8 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
         decision = "revise_answer"
         uncertainty = max(uncertainty, 0.90)
         if not reasoning:
-            reasoning = "回答生成阶段失败，需重试回答生成。"
-        hints.setdefault("revise_instructions", "请基于现有证据重试回答生成。")
+            reasoning = "Answer generation failed and must be retried."
+        hints.setdefault("revise_instructions", "Retry answer generation from the existing evidence.")
 
     # 主动追问策略：高不确定度时，优先让用户补充上下文。
     ask_threshold = _budget_float(state, "ask_user_uncertainty_threshold", 0.45)
@@ -2357,7 +2391,7 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
                 hints["clarify_question"] = (
                     req_questions[0]
                     if req_questions
-                    else "当前信息存在不确定性，请补充具体版本、环境或目标。"
+                    else _localized_uncertainty_question(state)
                 )
         elif stage == "pre_answer" and evidence and pre_budget_exhausted:
             decision = "accept_answer"
@@ -2530,27 +2564,27 @@ def answer_composer(state: dict) -> dict:
     evidence_block = ""
     for i, ev in enumerate(evidence[:10], start=1):
         evidence_block += (
-            f"\n--- 证据 E{i} ---\n"
-            f"证据 ID: E{i}\n"
-            f"来源: {ev.get('source', '?')}\n"
-            f"标题: {ev.get('title', '?')}\n"
+            f"\n--- Evidence E{i} ---\n"
+            f"Evidence ID: E{i}\n"
+            f"Source: {ev.get('source', '?')}\n"
+            f"Title: {ev.get('title', '?')}\n"
             f"URL: {ev.get('url', '')}\n"
-            f"锚点: {ev.get('anchor', '')}\n"
-            f"内容: {ev.get('snippet', '')}\n"
+            f"Anchor: {ev.get('anchor', '')}\n"
+            f"Content: {ev.get('snippet', '')}\n"
         )
 
     user_prompt = prompts.ANSWER_COMPOSER_USER.format(
         question=question,
         locale=locale,
         conversation_context=_conversation_context_from_state(state),
-        evidence_block=evidence_block or "(无可用证据)",
+        evidence_block=evidence_block or "(no usable evidence)",
         time_budget=_time_budget_prompt(state),
     )
     reflection_hints = state.get("reflection_hints", {})
     if isinstance(reflection_hints, dict):
         revise_instructions = str(reflection_hints.get("revise_instructions", "")).strip()
         if revise_instructions:
-            user_prompt += f"\n\n反思改写要求:\n{revise_instructions}"
+            user_prompt += f"\n\nReview rewrite instructions:\n{revise_instructions}"
 
     profile = _select_model_profile(
         state,

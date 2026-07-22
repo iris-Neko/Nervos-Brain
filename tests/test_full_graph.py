@@ -77,7 +77,7 @@ class TestInvalidCapacityScenario:
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
         mock_llm_responses = {
-            "信息缺口评估": json.dumps({
+            "Prompt ID: info_gap_assessor": json.dumps({
                 "decision": "ask_user",
                 "info_needs": [
                     {
@@ -91,7 +91,7 @@ class TestInvalidCapacityScenario:
         }
 
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "ask_user",
                 "info_needs": [
                     {
@@ -158,46 +158,46 @@ class TestFiberChannelScenario:
         ]
 
         mock_llm_responses = {
-            "信息缺口评估": json.dumps({
+            "Prompt ID: info_gap_assessor": json.dumps({
                 "decision": "has_needs",
                 "info_needs": [
                     {"kind": "concept_gap", "question": "Fiber 开通道的 API", "required": False}
                 ],
             }),
-            "检索规划": json.dumps({
+            "Prompt ID: retriever_planner": json.dumps({
                 "plan_id": "plan_test",
                 "rationale": "search for Fiber channel open",
                 "steps": [{"step_id": "step_1", "tool": "qdrant_search", "query": "Fiber open channel", "filters": {"source": "rfcs"}, "top_k": 5}],
                 "parallel_groups": [["step_1"]],
                 "budget": {"max_tool_calls": 3},
             }),
-            "证据评分": json.dumps({"grade": "enough", "reasoning": "证据覆盖了核心问题"}),
-            "回答组装": (
+            "reflection_pre": json.dumps({"grade": "enough", "reasoning": "证据覆盖了核心问题"}),
+            "Prompt ID: answer_composer": (
                 "使用 Fiber SDK 开通支付通道需要调用 `open_channel()` 方法 {{cite:E1}}。\n\n"
                 "```typescript\n"
                 "const channel = await fiber.openChannel({ peerId, capacity: '1000000000' });\n"
                 "```\n"
                 "这个示例来自 SDK 示例代码 {{cite:E2}}。\n"
             ),
-            "自检": json.dumps({"pass": True, "issues": [], "reasoning": "引用完整，格式正确"}),
+            "reflection_post": json.dumps({"pass": True, "issues": [], "reasoning": "引用完整，格式正确"}),
         }
 
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "info_needs": [
                     {"kind": "concept_gap", "question": "Fiber 开通道的 API", "required": False}
                 ],
             },
-            "检索规划": {
+            "Prompt ID: retriever_planner": {
                 "plan_id": "plan_test",
                 "rationale": "search for Fiber channel open",
                 "steps": [{"step_id": "step_1", "tool": "qdrant_search", "query": "Fiber open channel", "filters": {"source": "rfcs"}, "top_k": 5}],
                 "parallel_groups": [["step_1"]],
                 "budget": {"max_tool_calls": 3},
             },
-            "证据评分": {"grade": "enough", "reasoning": "证据覆盖了核心问题"},
-            "自检": {"pass": True, "issues": [], "reasoning": "引用完整，格式正确"},
+            "reflection_pre": {"grade": "enough", "reasoning": "证据覆盖了核心问题"},
+            "reflection_post": {"pass": True, "issues": [], "reasoning": "引用完整，格式正确"},
         }
 
         state = _make_state(
@@ -228,9 +228,9 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             _ = user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple direct answer", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 call_counter["info_gap"] += 1
                 return {
                     "decision": "answer_direct",
@@ -238,15 +238,15 @@ class TestDirectAnswerScenario:
                     "info_needs": [],
                     "reasoning": "identity/help question",
                 }
-            if "检索规划" in system_prompt:
+            if "Prompt ID: retriever_planner" in system_prompt:
                 call_counter["planner"] += 1
-            if "自检" in system_prompt:
+            if "Prompt ID: reflection" in system_prompt and "post-answer review" in system_prompt:
                 call_counter["self_check"] += 1
             return {"decision": "accept_answer", "uncertainty_score": 0.1}
 
         def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048):
             _ = user_prompt, json_mode, model, temperature, max_tokens
-            if "直接回答器" in system_prompt:
+            if "Prompt ID: direct_answer" in system_prompt:
                 call_counter["direct"] += 1
                 return "我是 Nervos Brain，可以帮你回答 Nervos/CKB/Fiber/CCC 相关问题。"
             return ""
@@ -271,9 +271,9 @@ class TestDirectAnswerScenario:
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "short correction feedback", "confidence": 0.9}
-            assert "信息缺口评估" in system_prompt
+            assert "Prompt ID: info_gap_assessor" in system_prompt
             assert "你是不是回复错问题了" in user_prompt
             return {
                 "decision": "answer_direct",
@@ -283,7 +283,7 @@ class TestDirectAnswerScenario:
             }
 
         def mock_call_llm(system_prompt, user_prompt, **_kwargs):
-            assert "直接回答器" in system_prompt
+            assert "Prompt ID: direct_answer" in system_prompt
             assert "你是不是回复错问题了" in user_prompt
             return "抱歉，刚才可能答偏了。请把你想继续问的问题再发一次，我会按当前问题重新回答。"
 
@@ -312,7 +312,7 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 captured["info_gap_user_prompt"] = user_prompt
                 return {
                     "decision": "answer_direct",
@@ -350,7 +350,7 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 captured["info_gap_user_prompt"] = user_prompt
                 return {
                     "decision": "answer_direct",
@@ -366,8 +366,8 @@ class TestDirectAnswerScenario:
             return "小白版就是：CKB 可以先理解成 Nervos 的底层账本和资产容器。"
 
         reply_context = (
-            "当前消息正在回复这条 assistant 消息: "
-            "CKB 通常指 Nervos CKB，是 Nervos 生态里的公链基础层。"
+            "Current message replies to this assistant message: "
+            "CKB usually refers to Nervos CKB, the base blockchain layer of the Nervos ecosystem."
         )
         state = _make_state(
             user_message={"content": "好，小白版的解释，你说一下"},
@@ -395,7 +395,7 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 captured["info_gap_user_prompt"] = user_prompt
                 return {
                     "decision": "has_needs",
@@ -408,7 +408,7 @@ class TestDirectAnswerScenario:
                         }
                     ],
                 }
-            if "检索规划器" in system_prompt:
+            if "Prompt ID: retriever_planner" in system_prompt:
                 captured["planner_user_prompt"] = user_prompt
                 return {
                     "plan_id": "p1",
@@ -473,13 +473,13 @@ class TestDirectAnswerScenario:
              patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
             result = build_full_graph().invoke(state)
 
-        assert "上下文门控" in captured["info_gap_user_prompt"]
-        assert "上下文门控" in captured["planner_user_prompt"]
+        assert "Context gate" in captured["info_gap_user_prompt"]
+        assert "Context gate" in captured["planner_user_prompt"]
         assert "Nervos Brain" not in captured["info_gap_user_prompt"]
         assert "Nervos Brain" not in captured["planner_user_prompt"]
         assert "CKB agent" not in captured["info_gap_user_prompt"]
         assert "CKB agent" not in captured["planner_user_prompt"]
-        assert result["conversation_context"].startswith("上下文门控")
+        assert result["conversation_context"].startswith("Context gate")
 
     def test_self_contained_question_overrides_plain_runtime_context(self):
         from nervos_brain.graph_engine.full_nodes import _conversation_context_from_state
@@ -494,7 +494,7 @@ class TestDirectAnswerScenario:
 
         context = _conversation_context_from_state(state)
 
-        assert context.startswith("上下文门控")
+        assert context.startswith("Context gate")
         assert "Nervos Brain" not in context
         assert "CKB agent" not in context
 
@@ -507,9 +507,9 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             _ = user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -548,7 +548,7 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             _ = user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
             captured["planner_system_prompt"] = system_prompt
             return {
@@ -586,7 +586,7 @@ class TestSingleRetrievalScenario:
         assert "source=github_docs" in prompt
         assert "source=github_code" in prompt
         assert "source=nervos_talk" in prompt
-        assert "不要自造 official_docs" in prompt
+        assert "Do not invent aliases such as official_docs" in prompt
         step = out["retrieval_plan"]["steps"][0]
         assert step["filters"] == {"source": "github_docs"}
         assert "mapped_source:official_docs->github_docs" in step["filter_notes"]
@@ -596,7 +596,7 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt: str, user_prompt: str, **_kwargs):
             _ = system_prompt, user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
             return {
                 "plan_id": "plan_code",
@@ -638,7 +638,7 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt: str, user_prompt: str, **_kwargs):
             _ = system_prompt, user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "technical retrieval", "confidence": 0.9}
             return {
                 "plan_id": "plan_ccc",
@@ -681,7 +681,7 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt: str, user_prompt: str, **_kwargs):
             _ = system_prompt, user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "forum lookup", "confidence": 0.9}
             return {
                 "plan_id": "plan_talk",
@@ -887,9 +887,9 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             _ = user_prompt
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 return {
                     "decision": "has_needs",
                     "retrieval_policy": "single",
@@ -901,7 +901,7 @@ class TestSingleRetrievalScenario:
                         }
                     ],
                 }
-            if "检索规划" in system_prompt:
+            if "Prompt ID: retriever_planner" in system_prompt:
                 return {
                     "plan_id": "p-progress",
                     "rationale": "Talk progress reports are the likely source",
@@ -917,12 +917,12 @@ class TestSingleRetrievalScenario:
                     "parallel_groups": [["step_1"]],
                     "budget": {"max_tool_calls": 1},
                 }
-            if "证据评分" in system_prompt or "自检" in system_prompt:
+            if "Prompt ID: reflection" in system_prompt:
                 return {"decision": "accept_answer", "reasoning": "enough", "uncertainty_score": 0.1}
             return {}
 
         def mock_call_llm(system_prompt, user_prompt, **_kwargs):
-            assert "回答组装器" in system_prompt
+            assert "Prompt ID: answer_composer" in system_prompt
             assert "Nervos Brain" in user_prompt
             return "Nervos Brain 目前处于早期工程化推进阶段，已打通数据入库和 RAG 闭环 {{cite:E1}}。"
 
@@ -947,15 +947,15 @@ class TestSingleRetrievalScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None, service_tier=None, **_kwargs):
             _ = user_prompt, model, service_tier
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "technical graph node", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 return {
                     "decision": "has_needs",
                     "retrieval_policy": "single",
                     "info_needs": [{"kind": "concept_gap", "question": "CKB definition", "required": False}],
                 }
-            if "检索规划" in system_prompt:
+            if "Prompt ID: retriever_planner" in system_prompt:
                 call_counter["planner"] += 1
                 return {
                     "plan_id": "p-single",
@@ -968,17 +968,17 @@ class TestSingleRetrievalScenario:
                     "parallel_groups": [["s1", "s2", "s3"]],
                     "budget": {"max_tool_calls": 3},
                 }
-            if "证据评分" in system_prompt:
+            if "Prompt ID: reflection" in system_prompt and "pre-answer evidence review" in system_prompt:
                 call_counter["pre"] += 1
                 return {"decision": "accept_answer", "reasoning": "enough", "uncertainty_score": 0.2}
-            if "自检" in system_prompt:
+            if "Prompt ID: reflection" in system_prompt and "post-answer review" in system_prompt:
                 call_counter["post"] += 1
                 return {"decision": "accept_answer", "reasoning": "ok", "uncertainty_score": 0.1}
             return {}
 
         def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048):
             _ = user_prompt, json_mode, model, temperature, max_tokens
-            if "回答组装" in system_prompt:
+            if "Prompt ID: answer_composer" in system_prompt:
                 call_counter["answer"] += 1
                 return "CKB 是 Nervos 的 Layer 1 区块链 {{cite:E1}}。"
             return ""
@@ -1097,7 +1097,7 @@ class TestEvidenceConflictScenario:
         )
 
         mock_json_responses = {
-            "证据评分": {"grade": "need_more", "reasoning": "证据版本冲突", "missing_aspects": ["需要确认最新版本"]},
+            "reflection_pre": {"grade": "need_more", "reasoning": "证据版本冲突", "missing_aspects": ["需要确认最新版本"]},
         }
 
         with patch("nervos_brain.graph_engine.full_nodes.call_llm_json",
@@ -1113,13 +1113,13 @@ class TestEvidenceConflictScenario:
         call_counter = {"info_gap": 0, "planner": 0, "grader": 0, "answer": 0, "self_check": 0}
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 call_counter["info_gap"] += 1
                 return {
                     "decision": "has_needs",
                     "info_needs": [{"kind": "concept_gap", "question": "Fiber API", "required": False}],
                 }
-            elif "检索规划" in system_prompt:
+            elif "Prompt ID: retriever_planner" in system_prompt:
                 call_counter["planner"] += 1
                 return {
                     "plan_id": f"plan_{call_counter['planner']}",
@@ -1128,18 +1128,18 @@ class TestEvidenceConflictScenario:
                     "parallel_groups": [["step_1"]],
                     "budget": {"max_tool_calls": 3},
                 }
-            elif "证据评分" in system_prompt:
+            elif "Prompt ID: reflection" in system_prompt and "pre-answer evidence review" in system_prompt:
                 call_counter["grader"] += 1
                 if call_counter["grader"] <= 1:
                     return {"grade": "need_more", "reasoning": "conflict", "missing_aspects": []}
                 return {"grade": "enough", "reasoning": "ok"}
-            elif "自检" in system_prompt:
+            elif "Prompt ID: reflection" in system_prompt and "post-answer review" in system_prompt:
                 call_counter["self_check"] += 1
                 return {"pass": True, "issues": [], "reasoning": "ok"}
             return {}
 
         def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048):
-            if "回答组装" in system_prompt:
+            if "Prompt ID: answer_composer" in system_prompt:
                 call_counter["answer"] += 1
                 return "Fiber 通道的正确用法是... {{cite:E1}}"
             return json.dumps(mock_call_llm_json(system_prompt, user_prompt))
@@ -1589,7 +1589,7 @@ class TestRetrieverPlannerNode:
             info_needs=[{"kind": "concept_gap", "question": "定义", "required": False}],
         )
         mock_json_responses = {
-            "检索规划": {
+            "Prompt ID: retriever_planner": {
                 "plan_id": "p1",
                 "rationale": "use github tool",
                 "steps": [
@@ -1622,7 +1622,7 @@ class TestRetrieverPlannerNode:
             info_needs=[{"kind": "concept_gap", "question": "定义", "required": False}],
         )
         mock_json_responses = {
-            "检索规划": {
+            "Prompt ID: retriever_planner": {
                 "plan_id": "p2",
                 "rationale": "unsupported tool",
                 "steps": [
@@ -1653,7 +1653,7 @@ class TestRetrieverPlannerNode:
             info_needs=[{"kind": "historical_consensus", "question": "Nervos Brain 项目背景", "required": False}],
         )
         mock_json_responses = {
-            "检索规划": {
+            "Prompt ID: retriever_planner": {
                 "plan_id": "p-regex",
                 "rationale": "named project hard recall",
                 "steps": [
@@ -1703,7 +1703,7 @@ class TestInfoGapAssessorNode:
 
         state = _make_state(user_message={"content": "你是谁"})
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "answer_direct",
                 "retrieval_policy": "single",
                 "info_needs": [],
@@ -1731,7 +1731,7 @@ class TestInfoGapAssessorNode:
             ],
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "answer_direct",
                 "retrieval_policy": "none",
                 "info_needs": [],
@@ -1854,7 +1854,7 @@ class TestInfoGapAssessorNode:
 
         state = _make_state(user_message={"content": question}, locale="en")
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1892,7 +1892,7 @@ class TestInfoGapAssessorNode:
             locale="en",
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1934,7 +1934,7 @@ class TestInfoGapAssessorNode:
             ],
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1966,7 +1966,7 @@ class TestInfoGapAssessorNode:
             },
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1997,7 +1997,7 @@ class TestInfoGapAssessorNode:
             force_retrieval=True,
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "answer_direct",
                 "info_needs": [],
                 "reasoning": "simple question",
@@ -2022,7 +2022,7 @@ class TestInfoGapAssessorNode:
             budget={"max_tool_calls": 4, "max_hops": 3, "max_reflection_rounds_pre": 2},
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -2049,7 +2049,7 @@ class TestInfoGapAssessorNode:
             budget={"max_tool_calls": 4, "max_hops": 3, "max_reflection_rounds_pre": 2},
         )
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -2080,7 +2080,7 @@ class TestInfoGapAssessorNode:
 
         state = _make_state(user_message={"content": "Fiber open_channel 报错，日志如下..."})
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "retrieval_policy": "deep",
                 "info_needs": [
@@ -2103,7 +2103,7 @@ class TestInfoGapAssessorNode:
 
         state = _make_state(user_message={"content": "我的 open_channel 报错了，怎么修？"})
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "ask_user",
                 "retrieval_policy": "none",
                 "info_needs": [
@@ -2130,7 +2130,7 @@ class TestInfoGapAssessorNode:
 
         state = _make_state(user_message={"content": "有没有比较靠谱的资料可以看？"})
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "ask_user",
                 "retrieval_policy": "none",
                 "info_needs": [
@@ -2162,9 +2162,9 @@ class TestFullGraphDebugState:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = user_prompt, model
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -2201,9 +2201,9 @@ class TestFullGraphDebugState:
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None, service_tier=None, **_kwargs):
             calls.append({"kind": "json", "service_tier": service_tier})
             _ = user_prompt, model
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "信息缺口评估" in system_prompt:
+            if "Prompt ID: info_gap_assessor" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -2233,93 +2233,92 @@ class TestFullGraphDebugState:
 
 
 class TestPromptBoundaries:
-    """关键 prompt 约束测试，防止后续回归到过度检索。"""
+    """Prompt contracts and language boundaries."""
+
+    @staticmethod
+    def _contains_cjk(text: str) -> bool:
+        return any("\u3400" <= char <= "\u9fff" for char in str(text))
+
+    def test_shared_prompt_ids_are_stable(self):
+        from nervos_brain.graph_engine import prompts
+
+        expected = {
+            prompts.INFO_GAP_SYSTEM: "info_gap_assessor",
+            prompts.RETRIEVER_PLANNER_SYSTEM: "retriever_planner",
+            prompts.REFLECTION_SYSTEM: "reflection",
+            prompts.DOC_GRADER_SYSTEM: "doc_grader",
+            prompts.ANSWER_COMPOSER_SYSTEM: "answer_composer",
+            prompts.DIRECT_ANSWER_SYSTEM: "direct_answer",
+            prompts.SELF_CHECK_SYSTEM: "self_check",
+        }
+        for prompt, prompt_id in expected.items():
+            assert f"Prompt ID: {prompt_id}" in prompt
 
     def test_info_gap_prompt_preserves_core_deliverable_and_scope(self):
         from nervos_brain.graph_engine import prompts
 
         assert "retrieval_policy" in prompts.INFO_GAP_SYSTEM
-        assert "对象、用户要完成的动作、期望交付物和显式范围" in prompts.INFO_GAP_SYSTEM
-        assert "只提高查证强度，不自动增加" in prompts.INFO_GAP_SYSTEM
-        assert "每个 info_need 都必须能说明它如何帮助完成核心交付物" in prompts.INFO_GAP_SYSTEM
-        assert "对象说明是检索上下文" in prompts.INFO_GAP_SYSTEM
-        assert "不自动产生“重新鉴定对象身份”的调查维度" in prompts.INFO_GAP_SYSTEM
-        assert "公开身份、公开版本、公开文档、公开渠道" in prompts.INFO_GAP_SYSTEM
-        assert "证据不足或来源冲突都不等于缺少用户私有信息" in prompts.INFO_GAP_SYSTEM
-        assert "不得自行加入 source_preference" in prompts.INFO_GAP_SYSTEM
-        assert "大多数单一事实、入口、资料、用法和当前状态问题使用 single" in prompts.INFO_GAP_SYSTEM
-        assert "步骤、参数、条件和限制属于同一事实簇" in prompts.INFO_GAP_SYSTEM
-        assert "默认生成一个综合 info_need" in prompts.INFO_GAP_SYSTEM
-        assert "预估可能需要多条证据不等于多个独立交付物" in prompts.INFO_GAP_SYSTEM
-        assert "从 info_needs 中删除对象身份、发行主体、术语定义和历史背景子句" in prompts.INFO_GAP_SYSTEM
-        assert "用户已经提供的对象说明默认用于消歧" in prompts.INFO_GAP_USER
-        assert "不要按实体名、领域关键词或用户要求“详细”机械升档" in prompts.INFO_GAP_SYSTEM
-        assert "旧答案和背景不是新的任务清单" in prompts.INFO_GAP_SYSTEM
-        assert "主动检索不等于多轮深检索" in prompts.INFO_GAP_SYSTEM
+        assert "The core deliverable controls routing" in prompts.INFO_GAP_SYSTEM
+        assert "increase verification effort; they do not add" in prompts.INFO_GAP_SYSTEM
+        assert "Every info_need must explain how it helps complete" in prompts.INFO_GAP_SYSTEM
+        assert "Object details supplied for disambiguation are retrieval context" in prompts.INFO_GAP_SYSTEM
+        assert "Public identity, versions, documentation, channels, code" in prompts.INFO_GAP_SYSTEM
+        assert "A temporary retrieval miss, insufficient evidence, or source conflict" in prompts.INFO_GAP_SYSTEM
+        assert "Do not invent source_preference" in prompts.INFO_GAP_SYSTEM
+        assert "Most single-fact" in prompts.INFO_GAP_SYSTEM
+        assert "one fact cluster" in prompts.INFO_GAP_SYSTEM
+        assert "Needing several evidence items" in prompts.INFO_GAP_SYSTEM
+        assert "remove identity, issuer, definition, and historical" in prompts.INFO_GAP_SYSTEM
+        assert "details already supplied by the user" in prompts.INFO_GAP_USER
+        assert "Do not upgrade based on entity names" in prompts.INFO_GAP_SYSTEM
+        assert "old answer and background do not expand the current task" in prompts.INFO_GAP_SYSTEM
+        assert "Stop when one round" in prompts.INFO_GAP_SYSTEM
+        assert "user-facing question" in prompts.INFO_GAP_SYSTEM
 
     def test_retriever_planner_prompt_prioritizes_answer_bearing_evidence(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "直接填入最终答案的事实" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "核心对象 + 用户原始动作 + 期望结果" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不扩大核心交付物的范围" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "已有证据足以完成核心交付物时停止" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "默认不加 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "证据质量，不是资料库或来源类型" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "filters 必须为 `{}`" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不得根据期望的权威性推导 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "官方渠道、官方入口、官方说明" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "模型自行生成的来源偏好也不能授权 source filter" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "输出前硬性检查" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要使用 info_needs、rationale 或你自己的来源偏好" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "只有用户原始问题明确限定资料库或来源类型" in prompts.RETRIEVER_PLANNER_USER
-        assert "一到两个检索所需的动作同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不同领域术语" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要只是重复翻译或改写用户原始动词" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "属于召回后的证据判断" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要把这类评价词或答案字段加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "4 到 8 个独立检索词" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "交付格式词、参数字段和重复同义词" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不得把对象身份、发行主体、定义或历史背景加入第一轮 query" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "删除与核心交付物无关的身份、发行主体、定义、历史" in prompts.RETRIEVER_PLANNER_USER
-        assert "最多两个非重复动作同义词" in prompts.RETRIEVER_PLANNER_USER
-        assert "query 不是答案字段清单" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "以免稀释对象、动作和结果" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "提高单个步骤的 top_k 以覆盖细节记录" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "默认只为核心对象保留一个最有区分度的 regex_query" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不要为动作、期望结果、常见类别词" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "facts that can be placed" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "core object + user's action + expected result" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Do not add them or answer-field lists" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Stop when the evidence is sufficient" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "source filter empty by default" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "result-quality requirements, not permission to select a backend" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "every qdrant_search step must use" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "one or two domain synonyms" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "merely translate" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "A query is not a list of answer fields" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Keep the first query to roughly 4-8" in prompts.RETRIEVER_PLANNER_SYSTEM
         assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "{retrieval_policy}" in prompts.RETRIEVER_PLANNER_USER
-        assert "默认只生成一个统一 qdrant_search step" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "不复制整段对话、纠错语气或内部评测描述" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "4-8 independent terms" in prompts.RETRIEVER_PLANNER_USER
+        assert "Remove unrelated identity" in prompts.RETRIEVER_PLANNER_USER
 
     def test_reflection_prompt_treats_buried_answer_as_functional_failure(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "第一优先级是任务完成度" in prompts.REFLECTION_SYSTEM
-        assert "首段没有直接完成用户请求" in prompts.REFLECTION_SYSTEM
-        assert "关键结论被背景埋没" in prompts.REFLECTION_SYSTEM
-        assert "属于范围漂移，不是单纯“可以更精炼”" in prompts.REFLECTION_SYSTEM
-        assert "已有直接证据时应 accept_answer" in prompts.REFLECTION_SYSTEM
-        assert "不要为了更多背景、来源数量或边际完整性继续检索" in prompts.REFLECTION_SYSTEM
-        assert "去掉来源限制、补充动作同义词" in prompts.REFLECTION_SYSTEM
-        assert "只在无关主题中偶然命中关键词的记录不是核心证据" in prompts.REFLECTION_SYSTEM
-        assert "不得要求用户提供公开身份、官网、文档或链接" in prompts.REFLECTION_SYSTEM
-        assert "首段必须交代关键分支及各自适用条件" in prompts.REFLECTION_SYSTEM
-        assert "把更普遍的分支埋到后文" in prompts.REFLECTION_SYSTEM
-        assert "可执行结果 + 证据边界" in prompts.REFLECTION_SYSTEM
-        assert "只道歉或承诺改进" in prompts.REFLECTION_SYSTEM
-        assert "direct answer 可以没有 citations" in prompts.REFLECTION_SYSTEM
+        assert "First priority is task completion" in prompts.REFLECTION_SYSTEM
+        assert "If the first paragraph does not directly complete" in prompts.REFLECTION_SYSTEM
+        assert "obvious scope drift" in prompts.REFLECTION_SYSTEM
+        assert "If direct evidence exists, accept_answer" in prompts.REFLECTION_SYSTEM
+        assert "Do not retrieve more background" in prompts.REFLECTION_SYSTEM
+        assert "without source restrictions" in prompts.REFLECTION_SYSTEM
+        assert "only happens to contain a keyword" in prompts.REFLECTION_SYSTEM
+        assert "Do not ask_user" in prompts.REFLECTION_SYSTEM
+        assert "broader branch after a restricted branch" in prompts.REFLECTION_SYSTEM
+        assert "actionable result + evidence boundary" in prompts.REFLECTION_SYSTEM
+        assert "only apologizes or promises improvement" in prompts.REFLECTION_SYSTEM
+        assert "A direct answer may have no citations" in prompts.REFLECTION_SYSTEM
+        assert "Any user-facing clarify_question" in prompts.REFLECTION_SYSTEM
 
     def test_model_router_prompt_uses_low_medium_and_high(self):
         from nervos_brain.graph_engine import full_nodes
 
-        assert "不要过度省模型，也不要过度升档" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "low、medium、high 三档之一" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "不按领域名称、实体名称或用户要求“详细”机械升档" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "证据被错误泛化" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "证据数量多但核心答案简单时不应升档" in full_nodes._LLM_ROUTER_SYSTEM
-        assert "主动选择更快档位" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "Prompt ID: model_router" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "select one of low, medium, or high" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "Do not underspend or overspend model capacity" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "incorrect evidence generalization" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "Many evidence items" in full_nodes._LLM_ROUTER_SYSTEM
+        assert "choose a faster tier" in full_nodes._LLM_ROUTER_SYSTEM
         assert full_nodes._MODEL_TIERS == {"low", "medium", "high"}
         assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "low"
         assert full_nodes._NODE_FALLBACK_TIERS["retriever_planner"] == "low"
@@ -2330,34 +2329,35 @@ class TestPromptBoundaries:
     def test_answer_composer_prompt_leads_with_deliverable_and_limits_scope(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "第一段直接交付用户要的结果" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "再按对核心交付物的帮助程度" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不意味着输出所有检索结果" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "未用于完成核心交付物的证据不写入正文" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "先短后详，但不使用僵硬的固定模板" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "禁止重复结论、重复总结、装饰性章节" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要用与核心交付物无关的证据、通用风险清单" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不得把公开可检索的对象身份、官网、文档或链接" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "只偶然出现关键词的材料不得作为核心证据" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "首段同时给出关键分支和选择依据" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "限制更少、适用更广的分支" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不得自行补成完整步骤、页面字段、地址、费用或到账流程" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不得把局部不确定性改写成“没有结果”" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不构成它不存在的证据" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要只写无法确认" in prompts.ANSWER_COMPOSER_USER
-        assert "若存在多个适用条件不同的答案分支" in prompts.ANSWER_COMPOSER_USER
-        assert "直接给出修正后的实际答案" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Deliver the requested result in the first paragraph" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "how much they help the core deliverable" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "dump of all retrieved results" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Evidence not used for the core" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Start concise and then add detail without a rigid template" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not repeat conclusions, summaries, decorative sections" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not fill space with unrelated evidence" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not ask the user to provide a publicly retrievable" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "keyword is not core evidence" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "selection criteria in the first paragraph" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "fewer restrictions" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not invent full steps, page fields, addresses, fees, or timing" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not rewrite a partial" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "does not prove" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "instead of only saying that it cannot be confirmed" in prompts.ANSWER_COMPOSER_USER
+        assert "If multiple branches apply under different conditions" in prompts.ANSWER_COMPOSER_USER
+        assert "give the corrected answer directly" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "只引用正文实际使用的证据" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Cite only evidence actually used" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "English language of these instructions" in prompts.ANSWER_COMPOSER_SYSTEM
 
     @pytest.mark.parametrize(
         ("task_kind", "contract_fragment"),
         [
-            ("action_or_channel", "可执行结果或入口"),
-            ("api_or_command", "正确的接口或命令"),
-            ("comparison", "比较结论或决策依据"),
-            ("troubleshooting", "最可能原因和下一步"),
-            ("explicit_full_investigation", "全面调查或完整报告"),
+            ("action_or_channel", "actionable result"),
+            ("api_or_command", "correct interface"),
+            ("comparison", "comparison conclusion"),
+            ("troubleshooting", "most likely cause"),
+            ("explicit_full_investigation", "full investigation"),
         ],
     )
     def test_answer_composer_generic_task_matrix(self, task_kind, contract_fragment):
@@ -2365,17 +2365,89 @@ class TestPromptBoundaries:
 
         assert task_kind
         assert contract_fragment in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "不要套用固定模板" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "仍应在开头交付最重要的结果" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not force a fixed template" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "still delivering the most important result first" in prompts.ANSWER_COMPOSER_SYSTEM
 
     def test_direct_answer_prompt_reanswers_corrections_instead_of_promising(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "不追加参考来源" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "立即给出修正后的答案" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "不要只回复“明白、以后会注意”" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "不要因为用户要求详细而扩展到未请求的主题" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "不得编造" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "Do not add references" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "immediately give the corrected answer" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "reply only with" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "Do not expand into unrequested topics" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "Do not invent external facts" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "Write the answer in the user locale" in prompts.DIRECT_ANSWER_SYSTEM
+
+    def test_static_runtime_prompt_scaffolding_is_english(self):
+        from nervos_brain.graph_engine import full_nodes, llm, prompts, source_registry
+        from nervos_brain.tool_runtime.discord_bot_runtime import _reply_context_from_envelope as discord_reply_context
+        from nervos_brain.tool_runtime.telegram_bot_runtime import _reply_context_from_envelope as telegram_reply_context
+
+        static_prompts = [
+            prompts.INFO_GAP_SYSTEM,
+            prompts.INFO_GAP_USER,
+            prompts.RETRIEVER_PLANNER_SYSTEM,
+            prompts.RETRIEVER_PLANNER_USER,
+            prompts.REFLECTION_SYSTEM,
+            prompts.REFLECTION_USER,
+            prompts.DOC_GRADER_SYSTEM,
+            prompts.DOC_GRADER_USER,
+            prompts.ANSWER_COMPOSER_SYSTEM,
+            prompts.ANSWER_COMPOSER_USER,
+            prompts.DIRECT_ANSWER_SYSTEM,
+            prompts.DIRECT_ANSWER_USER,
+            prompts.SELF_CHECK_SYSTEM,
+            prompts.SELF_CHECK_USER,
+            full_nodes._LLM_ROUTER_SYSTEM,
+            full_nodes._time_budget_prompt({}),
+            full_nodes._node_goal("info_gap_assessor"),
+            full_nodes._node_goal("answer_composer"),
+            full_nodes._format_conversation_context([]),
+            full_nodes._conversation_context_from_state(
+                {"user_message": {"content": "What is CKB?"}, "recent_messages": []}
+            ),
+            full_nodes._summarize_evidence([]),
+            full_nodes._summarize_conflicts([]),
+            full_nodes._summarize_citations([]),
+            source_registry.format_source_registry_for_prompt(),
+            llm._JSON_ONLY_SYSTEM_SUFFIX,
+            llm._JSON_ONLY_USER_SUFFIX,
+            telegram_reply_context({"reply_to_message_id": "42", "reply_to_role": "assistant"}),
+            discord_reply_context({"reply_to_message_id": "42", "reply_to_role": "assistant"}),
+        ]
+        assert all(not self._contains_cjk(text) for text in static_prompts)
+
+    def test_prompt_locale_fields_keep_dynamic_user_content_in_place(self):
+        from nervos_brain.graph_engine import prompts
+
+        info_prompt = prompts.INFO_GAP_USER.format(
+            question="中文问题",
+            locale="zh-CN",
+            conversation_context="(none)",
+            memory_facts="[]",
+            evidence_count=0,
+            time_budget="No hard time budget",
+        )
+        reflection_prompt = prompts.REFLECTION_USER.format(
+            stage="pre_answer",
+            locale="en",
+            question="English question",
+            info_needs="[]",
+            memory_facts="[]",
+            evidence_count=0,
+            evidence_summary="(no evidence)",
+            conflict_count=0,
+            conflicts_summary="(no conflicts)",
+            draft_answer="(no draft)",
+            citations_summary="(no citations)",
+            hop_count=0,
+            reflection_round=1,
+            time_budget="No hard time budget",
+        )
+        assert "User locale: zh-CN" in info_prompt
+        assert "中文问题" in info_prompt
+        assert "User locale: en" in reflection_prompt
+        assert "English question" in reflection_prompt
 
     def test_runtime_prompts_do_not_embed_regression_specific_rules(self):
         from nervos_brain.graph_engine import full_nodes, prompts
@@ -2406,14 +2478,14 @@ class TestPromptBoundaries:
     def test_financial_guidance_prompts_refuse_price_predictions(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "价格预测" in prompts.INFO_GAP_SYSTEM
-        assert "目标价" in prompts.INFO_GAP_SYSTEM
-        assert "买入、卖出、持仓" in prompts.INFO_GAP_SYSTEM
-        assert "中立事实、技术风险或公开数据来源" in prompts.INFO_GAP_SYSTEM
-        assert "不要为价格预测、目标价或交易决策生成检索计划" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "金融安全边界必须保持" in prompts.REFLECTION_SYSTEM
-        assert "免责声明不能绕过该限制" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "免责声明不能绕过该限制" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "price predictions" in prompts.INFO_GAP_SYSTEM
+        assert "target prices" in prompts.INFO_GAP_SYSTEM
+        assert "buy/sell/hold decisions" in prompts.INFO_GAP_SYSTEM
+        assert "neutral facts, technical risks, or public data sources" in prompts.INFO_GAP_SYSTEM
+        assert "Do not generate a retrieval plan for price predictions" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Preserve the financial safety boundary" in prompts.REFLECTION_SYSTEM
+        assert "Disclaimers do not bypass this rule" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Disclaimers do not bypass this rule" in prompts.DIRECT_ANSWER_SYSTEM
 
 
 class TestFinancialGuidanceGuard:
@@ -2555,22 +2627,22 @@ class TestRuntimeInjection:
         state = _make_state(user_message={"content": "什么是 ckb"}, force_retrieval=True)
 
         mock_llm_responses = {
-            "回答组装": "CKB 是 Nervos 的一层网络 {{cite:E1}}。",
+            "Prompt ID: answer_composer": "CKB 是 Nervos 的一层网络 {{cite:E1}}。",
         }
         mock_json_responses = {
-            "信息缺口评估": {
+            "Prompt ID: info_gap_assessor": {
                 "decision": "has_needs",
                 "info_needs": [{"kind": "concept_gap", "question": "定义", "required": False}],
             },
-            "检索规划": {
+            "Prompt ID: retriever_planner": {
                 "plan_id": "p1",
                 "rationale": "retrieve",
                 "steps": [{"step_id": "s1", "tool": "qdrant_search", "query": "什么是 ckb", "filters": {}, "top_k": 3}],
                 "parallel_groups": [["s1"]],
                 "budget": {"max_tool_calls": 1},
             },
-            "证据评分": {"grade": "enough", "reasoning": "enough"},
-            "自检": {"pass": True, "issues": [], "reasoning": "ok"},
+            "reflection_pre": {"grade": "enough", "reasoning": "enough"},
+            "reflection_post": {"pass": True, "issues": [], "reasoning": "ok"},
         }
 
         with patch(
@@ -2616,7 +2688,7 @@ class TestNodeModelRouter:
                     "max_tokens": max_tokens,
                 }
             )
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 assert '"allowed_tiers": ["low", "medium", "high"]' in user_prompt
                 return {"tier": "low", "reasoning": "technical planning", "confidence": 0.88}
             return {
@@ -2658,7 +2730,7 @@ class TestNodeModelRouter:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None, reasoning_effort=None, verbosity=None, max_tokens=None):
             _ = user_prompt, verbosity, max_tokens
-            if "模型档位路由器" in system_prompt:
+            if "Prompt ID: model_router" in system_prompt:
                 raise RuntimeError("router down")
             business_calls.append({"model": model, "reasoning_effort": reasoning_effort})
             return {
@@ -2704,7 +2776,7 @@ class TestNodeModelRouter:
                     "max_tokens": max_tokens,
                 }
             )
-            assert "模型档位路由器" in system_prompt
+            assert "Prompt ID: model_router" in system_prompt
             return {"tier": "high", "reasoning": "complex code answer", "confidence": 0.9}
 
         def mock_call_llm(system_prompt, user_prompt, *, json_mode=False, model=None, temperature=0.3, max_tokens=2048, reasoning_effort=None, verbosity=None, disable_response_storage=None):

@@ -551,7 +551,7 @@ def test_process_update_downloads_text_document_into_user_message(tmp_path: Path
     assert row["ignored"] is False
     content = captured["user_message"]["content"]
     assert "总结这个文件" in content
-    assert "用户上传的文本文件 `notes.md` 内容" in content
+    assert "Uploaded text file `notes.md` contents" in content
     assert "Cell model basics" in content
     attachment = captured["user_message"]["attachments"][0]
     assert attachment["status"] == "ready"
@@ -589,7 +589,7 @@ def test_process_update_downloads_image_attachment_for_llm(tmp_path: Path):
     assert attachment["kind"] == "image"
     assert attachment["status"] == "ready"
     assert Path(attachment["local_path"]).is_file()
-    assert "用户上传的图片已作为视觉输入传给模型" in captured["user_message"]["content"]
+    assert "The user's uploaded images are provided as visual input" in captured["user_message"]["content"]
 
 
 def test_group_reply_to_bot_processes_without_mention():
@@ -638,7 +638,7 @@ def test_group_reply_to_bot_injects_replied_message_context():
     assert row["ignored"] is False
     assert captured["user_message"]["reply_to_message_id"] == "99"
     assert "CCC 相关" in captured["user_message"]["reply_to_content"]
-    assert "当前消息正在回复这条 assistant 消息" in captured["conversation_context"]
+    assert "Current message replies to this assistant message" in captured["conversation_context"]
     assert "CCC 相关" in captured["conversation_context"]
 
 
@@ -706,8 +706,8 @@ def test_group_reply_to_bot_missing_snapshot_does_not_guess_from_recent_context(
     assert row["ignored"] is False
     assert memory.read_calls == []
     assert captured["recent_messages"] == []
-    assert "平台没有提供被回复消息内容" in captured["conversation_context"]
-    assert "不要从普通历史记录猜测被回复内容" in captured["conversation_context"]
+    assert "the platform did not provide the replied message content" in captured["conversation_context"]
+    assert "Do not guess it from ordinary history" in captured["conversation_context"]
     assert "Fiber WASM" not in captured["conversation_context"]
 
 

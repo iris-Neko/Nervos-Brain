@@ -351,8 +351,8 @@ def test_gateway_reply_without_snapshot_does_not_guess_from_recent_context():
     assert row["ignored"] is False
     assert memory.reads == []
     assert captured["recent_messages"] == []
-    assert "平台没有提供被回复消息内容" in captured["conversation_context"]
-    assert "不要从普通历史记录猜测被回复内容" in captured["conversation_context"]
+    assert "the platform did not provide the replied message content" in captured["conversation_context"]
+    assert "Do not guess it from ordinary history" in captured["conversation_context"]
     assert "Fiber WASM" not in captured["conversation_context"]
 
 
