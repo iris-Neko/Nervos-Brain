@@ -8,7 +8,7 @@
 #   开始
 #    │
 #    ▼
-#   InfoGapAssessor（判断信息够不够）
+#   Turn Interpreter（消费已解析的任务契约）
 #    │
 #    ├── 信息不够 ──► AskUser（反问用户）──► 结束
 #    │
@@ -38,7 +38,7 @@ from typing import Annotated, Any, List
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from .nodes import answer_composer, ask_user, info_gap_assessor
+from .nodes import answer_composer, ask_user, turn_interpreter
 
 
 # ============================================================
@@ -102,7 +102,7 @@ class MiniGraphState(TypedDict, total=False):
 
     # ---- 以下是节点之间传递的内部字段 ----
 
-    # InfoGapAssessor 的路由判断结果
+    # Turn Interpreter 的路由判断结果
     _route_decision: str
 
     # 最终回答（由 AskUser 或 AnswerComposer 写入）
@@ -115,7 +115,7 @@ class MiniGraphState(TypedDict, total=False):
 
 def route_after_assessment(state: MiniGraphState) -> str:
     """
-    条件路由：根据 InfoGapAssessor 的判断结果决定走哪条路。
+    条件路由：根据 Turn Interpreter 的判断结果决定走哪条路。
 
     返回值是下一个节点的名字（字符串）。
     """
@@ -143,17 +143,17 @@ def build_mini_graph() -> Any:
     graph = StateGraph(MiniGraphState)
 
     # 第 2 步：添加节点（流水线上的工位）
-    graph.add_node("info_gap_assessor", info_gap_assessor)
+    graph.add_node("turn_interpreter", turn_interpreter)
     graph.add_node("ask_user", ask_user)
     graph.add_node("answer_composer", answer_composer)
 
     # 第 3 步：设置入口（流水线从哪里开始）
-    graph.set_entry_point("info_gap_assessor")
+    graph.set_entry_point("turn_interpreter")
 
     # 第 4 步：添加条件边（分叉路口）
-    # InfoGapAssessor 执行完后，根据判断结果走不同的路
+    # Turn Interpreter 执行完后，根据判断结果走不同的路
     graph.add_conditional_edges(
-        "info_gap_assessor",           # 从哪个节点出发
+        "turn_interpreter",            # 从哪个节点出发
         route_after_assessment,        # 用哪个函数来决定走哪条路
         {
             "ask_user": "ask_user",              # 如果函数返回 "ask_user" → 去 ask_user 节点

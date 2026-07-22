@@ -42,7 +42,7 @@ def make_sufficient_state() -> GraphState:
                 "channel_id": "channel_dev",
             },
             "content": "CKB 的 Cell 模型是什么？",
-            "locale_hint": "zh-CN",
+            "platform_locale_hint": "zh-CN",
         },
 
         # -------- 记忆相关 --------
@@ -135,6 +135,7 @@ def make_insufficient_state() -> GraphState:
                 "kind": "missing_param",
                 "question": "用户使用的是哪个语言的 Fiber SDK？(JavaScript / Rust / Go)",
                 "required": True,
+                "availability": "user_owned",
             },
         ],
         evidence=[],          # 还没开始查，因为缺参数

@@ -25,6 +25,7 @@ import requests
 
 from nervos_brain.logging_system import log_request_context
 from nervos_brain.response_normalizer.platform_formatter import format_response_to_outbound
+from nervos_brain.graph_engine.product_policy import load_product_policy
 
 from .telegram_bot_protocol_adapter import (
     message_envelope_to_graph_state,
@@ -355,7 +356,7 @@ class _TelegramMessageProgress:
         self._chat_id = str(chat_id or "").strip()
         self._envelope = envelope
         self._config = config
-        self._locale = str(locale or "zh-CN")
+        self._locale = str(locale or load_product_policy().language.default_locale)
         self._enabled = bool(enabled and self._chat_id and config.should_run)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -739,7 +740,7 @@ class TelegramPollingGateway:
                 chat_id=chat_id or raw_chat_id,
                 envelope=envelope,
                 config=self._progress_update_config,
-                locale=str(state.get("locale") or envelope.get("locale_hint") or "zh-CN"),
+                locale=str(state.get("locale") or load_product_policy().language.default_locale),
                 enabled=not dry_run,
             )
             typing_progress.start()
@@ -755,7 +756,10 @@ class TelegramPollingGateway:
                 result = {
                     "_final_response": {
                         "request_id": str(state.get("request_id", "unknown")),
-                        "text": "处理请求时发生错误，请稍后重试。",
+                        "text": load_product_policy().message(
+                            "generation_failed",
+                            state.get("response_locale") or state.get("locale"),
+                        ),
                         "citations": [],
                     }
                 }
@@ -1045,48 +1049,12 @@ class TelegramPollingGateway:
         state: dict[str, Any],
         envelope: dict[str, Any],
     ) -> None:
-        reply_context = _reply_context_from_envelope(envelope)
-        if envelope.get("reply_to_message_id"):
-            state["recent_messages"] = []
-            state["conversation_context"] = reply_context
-            return
-
-        svc = self._memory_service
-        if svc is None or not hasattr(svc, "list_recent_message_events"):
-            if reply_context:
-                state["recent_messages"] = []
-                state["conversation_context"] = reply_context
-            return
-        context = envelope.get("context", {})
-        if not isinstance(context, dict):
-            return
-        platform = str(context.get("platform", "telegram") or "telegram")
-        user_id = str(context.get("user_id", "") or "")
-        if not user_id:
-            return
-        if not _should_attach_recent_context(envelope):
-            state["recent_messages"] = []
-            state["conversation_context"] = ""
-            return
-        try:
-            rows = svc.list_recent_message_events(
-                platform=platform,
-                user_id=user_id,
-                guild_id=_optional_str(context.get("guild_id")),
-                channel_id=_optional_str(context.get("channel_id")),
-                thread_id=_optional_str(context.get("thread_id")),
-                limit=self._memory_context_limit,
-            )
-        except Exception as exc:
-            logger.debug("telegram recent memory read failed user_id=%s error=%s", user_id, exc)
-            return
-        if isinstance(rows, list):
-            state["recent_messages"] = rows
-            recent_context = _format_recent_messages(rows)
-            if reply_context and recent_context:
-                state["conversation_context"] = f"{reply_context}\n{recent_context}"
-            else:
-                state["conversation_context"] = reply_context or recent_context
+        # The Turn Interpreter decides whether ordinary history is relevant.
+        # The direct reply snapshot remains on the message envelope as an
+        # explicit anchor and is not promoted to general context here.
+        state["recent_messages"] = []
+        state["selected_context"] = []
+        state["conversation_context"] = ""
 
     def _write_memory_event(
         self,
@@ -1329,6 +1297,15 @@ class TelegramPollingGateway:
             context = envelope.get("context", {})
             if not isinstance(context, dict):
                 context = {}
+            contract = result.get("turn_contract") if isinstance(result.get("turn_contract"), dict) else state.get("turn_contract", {})
+            if not isinstance(contract, dict):
+                contract = {}
+            language = contract.get("language", {})
+            if not isinstance(language, dict):
+                language = {}
+            selected_context = result.get("selected_context") or state.get("selected_context", [])
+            if not isinstance(selected_context, list):
+                selected_context = []
             event = {
                 "created_ts_ms": int(time.time() * 1000),
                 "update_id": update_id,
@@ -1347,6 +1324,17 @@ class TelegramPollingGateway:
                 "send_results": send_results[:10],
                 "content_preview": _message_text_preview(_extract_message_payload(update), limit=240),
                 "normalized_content": str(envelope.get("content", ""))[:240],
+                "turn_relation": str(contract.get("turn_relation", "")),
+                "core_deliverable_preview": _preview_text(contract.get("core_deliverable", ""), limit=500),
+                "context_requirement": str((contract.get("context") or {}).get("requirement", "")) if isinstance(contract.get("context"), dict) else "",
+                "selected_context_count": len(selected_context),
+                "input_locales": language.get("input_locales", []) if isinstance(language.get("input_locales"), list) else [],
+                "communication_locale": str(language.get("communication_locale", "") or ""),
+                "requested_output_locale": str(language.get("requested_output_locale", "") or ""),
+                "locale_source": str(language.get("locale_source", "") or ""),
+                "response_locale": str(result.get("response_locale") or state.get("response_locale") or ""),
+                "contract_route": str(contract.get("route", "")),
+                "compliance_decision": str(result.get("_compliance_decision") or state.get("_compliance_decision") or ""),
                 "route_decision": str(result.get("_route_decision") or state.get("_route_decision") or ""),
                 "llm_service_tier": str(result.get("_llm_service_tier") or state.get("_llm_service_tier") or ""),
                 "retrieval_policy": str(result.get("retrieval_policy") or state.get("retrieval_policy") or ""),
@@ -1723,57 +1711,6 @@ def _decode_text_attachment(data: bytes) -> str | None:
     return None
 
 
-def _format_recent_messages(rows: list[Any], limit_chars: int = 1800) -> str:
-    if not rows:
-        return ""
-    lines: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        role = str(row.get("role", "message") or "message")
-        content = re.sub(r"\s+", " ", str(row.get("content", "") or "")).strip()
-        if not content:
-            continue
-        if len(content) > 220:
-            content = content[:220].rstrip() + "..."
-        lines.append(f"{role}: {content}")
-    text = "\n".join(lines).strip()
-    if len(text) > limit_chars:
-        text = text[-limit_chars:].lstrip()
-    return text
-
-
-def _reply_context_from_envelope(envelope: dict[str, Any]) -> str:
-    reply_text = re.sub(r"\s+", " ", str(envelope.get("reply_to_content", "") or "")).strip()
-    reply_id = str(envelope.get("reply_to_message_id", "") or "").strip()
-    if not reply_text:
-        if reply_id:
-            role = str(envelope.get("reply_to_role", "") or "").strip().lower()
-            if role in {"assistant", "bot"}:
-                label = "assistant"
-            elif role == "user":
-                label = "user"
-            else:
-                label = "replied_message"
-            return (
-                f"Current message replies to a {label} message (message_id={reply_id}), "
-                "but the platform did not provide the replied message content. Do not guess it "
-                "from ordinary history; if this short follow-up cannot be understood on its own, "
-                "ask the user to provide or resend the replied content."
-            )
-        return ""
-    if len(reply_text) > 700:
-        reply_text = reply_text[:700].rstrip() + "..."
-    role = str(envelope.get("reply_to_role", "") or "").strip().lower()
-    if role in {"assistant", "bot"}:
-        label = "assistant"
-    elif role == "user":
-        label = "user"
-    else:
-        label = "replied_message"
-    return f"Current message replies to this {label} message: {reply_text}"
-
-
 def _preview_text(value: Any, *, limit: int = 300) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     if len(text) > limit:
@@ -1795,102 +1732,6 @@ def _debug_recent_messages_preview(value: Any) -> list[dict[str, str]]:
             }
         )
     return rows
-
-
-def _normalized_message_text(text: Any) -> str:
-    return re.sub(r"\s+", "", str(text or "").lower())
-
-
-def _asks_for_recent_context(text: str) -> bool:
-    normalized = _normalized_message_text(text)
-    if not normalized:
-        return False
-    markers = (
-        "上文",
-        "上下文",
-        "刚才",
-        "刚刚",
-        "之前",
-        "前面",
-        "上面",
-        "继续",
-        "接着",
-        "延续",
-        "它",
-        "这个",
-        "那个",
-        "那",
-        "同样",
-        "换成",
-        "再来",
-        "再写",
-        "我刚才",
-        "你刚才",
-    )
-    return any(marker in normalized for marker in markers)
-
-
-def _is_standalone_named_question(text: str) -> bool:
-    normalized = _normalized_message_text(text)
-    if not normalized:
-        return False
-    if any(marker in normalized for marker in ("上文", "上下文", "刚才", "之前", "继续", "接着")):
-        return False
-    subjects = (
-        "ckb",
-        "nervos",
-        "fiber",
-        "ccc",
-        "rgb++",
-        "spore",
-        "molecule",
-        "cell",
-        "utxo",
-        "commonknowledgebase",
-    )
-    intents = (
-        "是什么",
-        "什么是",
-        "怎么",
-        "如何",
-        "为什么",
-        "区别",
-        "原理",
-        "流程",
-        "构建",
-        "开发",
-        "教程",
-        "介绍",
-        "解释",
-        "应用",
-        "代码",
-        "示例",
-        "例子",
-    )
-    return any(subject in normalized for subject in subjects) and any(
-        intent in normalized for intent in intents
-    )
-
-
-def _looks_like_short_followup(text: str) -> bool:
-    normalized = _normalized_message_text(text)
-    if not normalized:
-        return False
-    if _is_standalone_named_question(text):
-        return False
-    if normalized in {"你是谁", "help", "/help", "帮助"}:
-        return False
-    return len(normalized) <= 48
-
-
-def _should_attach_recent_context(envelope: dict[str, Any]) -> bool:
-    """Only inject same-user history when the current turn actually depends on it."""
-    if envelope.get("reply_to_message_id"):
-        return True
-    text = str(envelope.get("content", "") or "")
-    if _is_standalone_named_question(text):
-        return False
-    return _asks_for_recent_context(text) or _looks_like_short_followup(text)
 
 
 def _memory_event_ts_ms(*, envelope: dict[str, Any], role: str) -> int:

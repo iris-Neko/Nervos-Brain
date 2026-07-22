@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ from nervos_brain.tool_runtime.discord_bot_runtime import (
     DiscordBotRuntime,
     DiscordBotRuntimeError,
     DiscordGateway,
-    _detect_discord_progress_locale,
+    _platform_progress_locale,
     _send_discord_progress_updates,
 )
 from nervos_brain.tool_runtime.fast_mode import FastModeStateStore
@@ -167,7 +168,7 @@ def test_gateway_runner_error_returns_fallback_message():
     row = gateway.process_message_payload(_sample_payload(guild_id=None, text="hello"), bot_user_id=None)
     assert row["ignored"] is False
     assert len(row["send_requests"]) == 1
-    assert "处理请求时发生错误" in row["send_requests"][0]["payload"]["content"]
+    assert "I could not prepare the answer" in row["send_requests"][0]["payload"]["content"]
 
 
 def test_gateway_splits_long_response():
@@ -264,7 +265,7 @@ class _FakeMemoryService:
         return f"evt-{len(self.writes)}"
 
 
-def test_gateway_processes_reply_to_bot_without_mention_and_injects_reply_context():
+def test_gateway_processes_reply_to_bot_without_mention_and_preserves_reply_anchor():
     captured: dict[str, Any] = {}
 
     def runner(state: dict[str, Any]) -> dict[str, Any]:
@@ -283,7 +284,8 @@ def test_gateway_processes_reply_to_bot_without_mention_and_injects_reply_contex
 
     assert row["ignored"] is False
     assert captured["user_message"]["reply_to_message_id"] == "m-bot"
-    assert "上一条回答内容" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
+    assert captured["user_message"]["reply_to_content"] == "上一条回答内容"
 
 
 def test_gateway_reply_context_does_not_mix_unrelated_recent_context():
@@ -317,7 +319,8 @@ def test_gateway_reply_context_does_not_mix_unrelated_recent_context():
     assert row["ignored"] is False
     assert memory.reads == []
     assert captured["recent_messages"] == []
-    assert "CKB 通常指 Nervos CKB" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
+    assert captured["user_message"]["reply_to_content"].startswith("CKB 通常指 Nervos CKB")
     assert "Fiber WASM" not in captured["conversation_context"]
 
 
@@ -351,8 +354,8 @@ def test_gateway_reply_without_snapshot_does_not_guess_from_recent_context():
     assert row["ignored"] is False
     assert memory.reads == []
     assert captured["recent_messages"] == []
-    assert "the platform did not provide the replied message content" in captured["conversation_context"]
-    assert "Do not guess it from ordinary history" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
+    assert "reply_to_content" not in captured["user_message"]
     assert "Fiber WASM" not in captured["conversation_context"]
 
 
@@ -391,8 +394,8 @@ def test_gateway_writes_memory_and_uses_recent_context_for_followup():
     assert len(memory.writes) == 2
     assert memory.writes[0]["role"] == "user"
     assert memory.writes[1]["role"] == "assistant"
-    assert memory.reads[0]["limit"] == 7
-    assert "之前解释过 CCC" in captured["conversation_context"]
+    assert memory.reads == []
+    assert captured["conversation_context"] == ""
 
 
 def test_gateway_feedback_command_writes_comment(tmp_path):
@@ -447,6 +450,20 @@ def test_gateway_writes_debug_event(tmp_path):
     debug_file = tmp_path / "debug.jsonl"
     gateway = DiscordGateway(
         graph_runner=lambda state: {
+            "turn_contract": {
+                "turn_relation": "new_task",
+                "core_deliverable": "direct answer",
+                "context": {"requirement": "none"},
+                "language": {
+                    "input_locales": ["en"],
+                    "communication_locale": "en",
+                    "requested_output_locale": "",
+                    "locale_source": "current_message",
+                },
+                "route": "direct",
+            },
+            "response_locale": "en",
+            "_compliance_decision": "accept",
             "_final_response": {"request_id": state["request_id"], "text": "ok", "citations": []},
             "_tool_calls_executed": 1,
         },
@@ -461,6 +478,15 @@ def test_gateway_writes_debug_event(tmp_path):
     assert len(lines) == 1
     assert '"platform": "discord"' in lines[0]
     assert '"tool_calls": 1' in lines[0]
+    event = json.loads(lines[0])
+    assert event["turn_relation"] == "new_task"
+    assert event["core_deliverable_preview"] == "direct answer"
+    assert event["context_requirement"] == "none"
+    assert event["input_locales"] == ["en"]
+    assert event["communication_locale"] == "en"
+    assert event["response_locale"] == "en"
+    assert event["contract_route"] == "direct"
+    assert event["compliance_decision"] == "accept"
 
 
 def test_gateway_text_attachment_is_added_to_graph_context(monkeypatch):
@@ -584,14 +610,14 @@ def test_fast_command_works_as_discord_runtime_command_in_guild(tmp_path: Path):
     assert store.is_pending(platform="discord", user_id="u-1") is True
 
 
-def test_discord_progress_locale_strips_bot_mention_and_prefers_message_language():
+def test_discord_progress_locale_uses_policy_default_not_account_locale():
     payload = _sample_payload(
         text="<@999> How to set up a Fiber node?",
         mention_user_ids=["999"],
     )
     payload["author"]["locale"] = "zh-CN"
 
-    assert _detect_discord_progress_locale(payload, "999") == "en"
+    assert _platform_progress_locale(payload) == "en"
 
 
 class _FakeDiscordChannel:

@@ -79,8 +79,8 @@ class MessageEnvelope(TypedDict):
     # 命令参数，例如链接或主题词
     command_args: NotRequired[str]
 
-    # 用户语言提示，例如 zh-CN
-    locale_hint: NotRequired[str]
+    # Platform account preference only; never the semantic response locale.
+    platform_locale_hint: NotRequired[str]
 
 
 # 消息在内部总线中的优先级

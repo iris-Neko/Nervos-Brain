@@ -78,7 +78,7 @@ class TestValidMessageEnvelope:
             "attachments": [
                 {"kind": "image", "url": "https://example.com/screenshot.png"},
             ],
-            "locale_hint": "zh-CN",
+            "platform_locale_hint": "zh-CN",
         }
         errors = validate_message_envelope(msg)
         assert errors == [], f"完整消息不应报错，但收到: {errors}"

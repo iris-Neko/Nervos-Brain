@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from nervos_brain.graph_engine.product_policy import load_product_policy
+
 _DEFAULT_PROGRESS_MESSAGES = (
-    "我还在查资料和整理证据，稍等一下。",
-    "资料比较多，我正在核对来源和组织回答。",
-    "还在生成最终回答，请再等一下。",
+    "I am still checking sources and organizing the evidence. Please wait a moment.",
+    "I am verifying the relevant material and preparing the answer.",
+    "I am still preparing the final answer. Please wait a little longer.",
 )
 
 _DEFAULT_PROGRESS_MESSAGES_EN = (
@@ -53,11 +55,11 @@ class ProgressUpdateConfig:
             messages_by_locale=messages_by_locale,
         )
 
-    def message_for(self, index: int, locale: str = "zh-CN") -> str:
+    def message_for(self, index: int, locale: str | None = None) -> str:
         normalized_locale = _normalize_locale(locale)
         messages = self._messages_for_locale(normalized_locale)
         if not messages:
-            return _DEFAULT_FALLBACK_MESSAGES.get(normalized_locale, _DEFAULT_FALLBACK_MESSAGES["zh-CN"])
+            return _DEFAULT_FALLBACK_MESSAGES.get(normalized_locale, _DEFAULT_FALLBACK_MESSAGES["en"])
         if index < len(messages):
             return messages[index]
         return messages[-1]
@@ -70,7 +72,13 @@ class ProgressUpdateConfig:
         localized = self.messages_by_locale or {}
         if locale in localized:
             return localized[locale]
+        prefix = locale.split("-", 1)[0]
+        for configured_locale, messages in localized.items():
+            if configured_locale.split("-", 1)[0] == prefix:
+                return messages
         if locale == "en":
+            return _DEFAULT_PROGRESS_MESSAGES_EN
+        if prefix == "en":
             return _DEFAULT_PROGRESS_MESSAGES_EN
         return self.messages
 
@@ -137,8 +145,6 @@ def _localized_message_tuple(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _normalize_locale(locale: str) -> str:
-    text = str(locale or "").strip().lower().replace("_", "-")
-    if text.startswith("en"):
-        return "en"
-    return "zh-CN"
+def _normalize_locale(locale: str | None) -> str:
+    default_locale = load_product_policy().language.default_locale
+    return str(locale or "").strip().replace("_", "-") or default_locale

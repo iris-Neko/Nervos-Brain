@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from nervos_brain.graph_engine.full_nodes import ask_user, info_gap_assessor, retrieval_executor
+from nervos_brain.graph_engine.full_nodes import ask_user, turn_interpreter, retrieval_executor
 from nervos_brain.retrieval import ArchiveRecord, ArchiveStore, RetrievalConfig
 
 
@@ -182,7 +182,13 @@ def test_ask_user_suspends_thread_checkpoint():
     state = {
         "request_id": "r2",
         "info_needs": [
-            {"kind": "missing_param", "question": "请补充 SDK 语言", "required": True, "hints": {"sdk_language": ""}}
+            {
+                "kind": "missing_param",
+                "question": "请补充 SDK 语言",
+                "required": True,
+                "availability": "user_owned",
+                "hints": {"sdk_language": ""},
+            }
         ],
         "user_message": {
             "context": {
@@ -204,7 +210,7 @@ def test_ask_user_suspends_thread_checkpoint():
     assert response.get("trace_summary", "").startswith("thread_checkpoint=")
 
 
-def test_info_gap_assessor_resumes_checkpoint():
+def test_turn_interpreter_resumes_checkpoint():
     memory = _FakeMemoryService()
     state = {
         "request_id": "r3",
@@ -226,19 +232,32 @@ def test_info_gap_assessor_resumes_checkpoint():
 
     with patch(
         "nervos_brain.graph_engine.full_nodes.call_llm_json",
-        return_value={"decision": "ask_user", "info_needs": []},
+        return_value={
+            "route": "retrieve",
+            "turn_relation": "clarification_answer",
+            "resolved_request": "写一个交易记账app示例吧；用户补充使用 js sdk 0.3。",
+            "retrieval_policy": "single",
+            "info_needs": [
+                {
+                    "kind": "public_docs",
+                    "question": "Retrieve the public SDK documentation for the requested example.",
+                    "required": False,
+                    "availability": "public",
+                }
+            ],
+        },
     ):
-        result = info_gap_assessor(state)
+        result = turn_interpreter(state)
 
     assert result["_route_decision"] == "has_needs"
     assert "写一个交易记账app示例吧" in result.get("resolved_question", "")
-    assert "我用的是 js sdk 0.3" in result.get("resolved_question", "")
+    assert "js sdk 0.3" in result.get("resolved_question", "")
     assert len(result["memory_facts"]) >= 1
     assert memory.last_resume_key["thread_id"] == "t1:user:u1"
     assert memory.completed, "恢复路径应尝试完成 checkpoint"
 
 
-def test_info_gap_assessor_resume_drops_required_missing_param_from_llm():
+def test_turn_interpreter_resume_drops_required_missing_param_from_llm():
     memory = _FakeMemoryService()
     state = {
         "request_id": "r-resume-ts",
@@ -260,27 +279,30 @@ def test_info_gap_assessor_resume_drops_required_missing_param_from_llm():
     with patch(
         "nervos_brain.graph_engine.full_nodes.call_llm_json",
         return_value={
-            "decision": "ask_user",
-            "retrieval_policy": "none",
+            "route": "retrieve",
+            "turn_relation": "clarification_answer",
+            "resolved_request": "继续处理 ts 调用脚本；用户已说明当前环境和目标。",
+            "retrieval_policy": "single",
             "info_needs": [
                 {
-                    "kind": "missing_param",
-                    "question": "请补充具体版本、环境或目标",
-                    "required": True,
+                    "kind": "public_docs",
+                    "question": "Retrieve public documentation relevant to the script call.",
+                    "required": False,
+                    "availability": "public",
                 }
             ],
         },
     ):
-        result = info_gap_assessor(state)
+        result = turn_interpreter(state)
 
     assert result["_route_decision"] == "has_needs"
     assert result["retrieval_policy"] == "single"
     assert all(not need.get("required") for need in result["info_needs"])
-    assert "ts调用脚本" in result["resolved_question"]
+    assert "ts" in result["resolved_question"]
     assert memory.completed
 
 
-def test_info_gap_assessor_discards_stale_checkpoint_for_new_user_question():
+def test_turn_interpreter_discards_stale_checkpoint_for_new_user_question():
     memory = _FakeMemoryService()
     state = {
         "request_id": "r-stale-checkpoint",
@@ -311,7 +333,7 @@ def test_info_gap_assessor_discards_stale_checkpoint_for_new_user_question():
         }
 
     with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
-        result = info_gap_assessor(state)
+        result = turn_interpreter(state)
 
     assert result["_route_decision"] == "answer_direct"
     assert result["resolved_question"] == "ckb是什么"
@@ -325,7 +347,12 @@ def test_thread_checkpoint_uses_default_group_thread_and_user_id():
     state = {
         "request_id": "r-default-thread",
         "info_needs": [
-            {"kind": "missing_param", "question": "请补充 SDK 语言", "required": True}
+            {
+                "kind": "missing_param",
+                "question": "请补充 SDK 语言",
+                "required": True,
+                "availability": "user_owned",
+            }
         ],
         "user_message": {
             "context": {

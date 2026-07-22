@@ -23,7 +23,7 @@
 #   就像给你一个固定的"零花钱"，花完了就得停。
 # ============================================================
 
-from typing import List, Literal, NotRequired, TypedDict
+from typing import Any, List, Literal, NotRequired, TypedDict
 
 from .memory_protocols import (
     ChannelMemoryKey,
@@ -34,6 +34,7 @@ from .memory_protocols import (
 )
 from .message_protocols import MessageEnvelope
 from .retrieval_protocols import Evidence, EvidenceConflict, InfoNeed, RetrievalPlan
+from .turn_protocols import TurnContract
 
 
 # ============================================================
@@ -140,6 +141,26 @@ class GraphState(TypedDict):
     # 用户的语言（例如 "zh-CN"、"en"）
     # 用于决定回答用什么语言
     locale: str
+
+    # Platform-provided account preference; never a semantic language decision.
+    platform_locale_hint: NotRequired[str]
+
+    # Shared product policy instance injected at the protocol boundary.
+    _product_policy: NotRequired[Any]
+
+    # 当前用户回合的唯一语义契约
+    turn_contract: NotRequired[TurnContract]
+
+    # contract 解析出的最终回答语言
+    response_locale: NotRequired[str]
+
+    # 经过语义选择后允许下游使用的上下文
+    selected_context: NotRequired[List[dict]]
+
+    # Turn Interpreter / Compliance 的观测与预算字段
+    turn_interpretation_passes: NotRequired[int]
+    contract_repair_count: NotRequired[int]
+    compliance_replacement_count: NotRequired[int]
 
     # 线程补参恢复后的“合并问题”（原问题 + 用户补充）
     # 未恢复时可不填，默认等于 user_message.content

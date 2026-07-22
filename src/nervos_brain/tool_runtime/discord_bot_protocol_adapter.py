@@ -7,14 +7,12 @@ from datetime import datetime
 from typing import Any
 
 from nervos_brain.core_protocols.message_protocols import MessageEnvelope, OutboundMessage
-
-from .language_detection import detect_message_locale
-
+from nervos_brain.graph_engine.product_policy import load_product_policy
 
 def discord_message_to_message_envelope(
     message: dict[str, Any],
     *,
-    default_locale: str = "zh-CN",
+    default_locale: str | None = None,
 ) -> MessageEnvelope:
     """Parse Discord message payload into platform-neutral MessageEnvelope."""
     if not isinstance(message, dict):
@@ -71,11 +69,12 @@ def discord_message_to_message_envelope(
         if command_args:
             envelope["command_args"] = command_args
 
+    # This is only a weak platform preference. Semantic output language is
+    # resolved by TurnInterpreter from the current request.
     locale = author.get("locale")
-    fallback_locale = str(locale).strip() if isinstance(locale, str) and locale.strip() else default_locale
-    envelope["locale_hint"] = detect_message_locale(
-        command_args if command_args is not None else content,
-        fallback_locale=fallback_locale,
+    policy_default = default_locale or load_product_policy().language.default_locale
+    envelope["platform_locale_hint"] = (
+        str(locale).strip() if isinstance(locale, str) and locale.strip() else policy_default
     )
     return envelope
 
@@ -88,7 +87,8 @@ def discord_message_envelope_to_graph_state(
     """Build a minimal full-graph compatible state dict from Discord envelope."""
     context = dict(message.get("context", {}))
     now_req = request_id or f"dc-{int(time.time() * 1000)}"
-    locale = str(message.get("locale_hint", "zh-CN"))
+    policy = load_product_policy()
+    locale = policy.language.default_locale
 
     user_key = {
         "platform": "discord",
@@ -112,6 +112,8 @@ def discord_message_envelope_to_graph_state(
         },
         "route": "graph",
         "locale": locale,
+        "platform_locale_hint": str(message.get("platform_locale_hint", "") or ""),
+        "_product_policy": policy,
     }
 
     guild_id = context.get("guild_id")

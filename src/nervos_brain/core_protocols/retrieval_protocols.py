@@ -57,6 +57,12 @@ class InfoNeed(TypedDict):
     # 是否必须解决：True = 不解决就不能回答
     required: bool
 
+    # 缺口来自公开资料还是只能由用户提供的私有/现场信息
+    availability: NotRequired[Literal["public", "user_owned"]]
+
+    # 说明这个缺口如何直接完成核心交付物
+    purpose: NotRequired[str]
+
     # 可选的提示信息，帮助检索更精准
     # 例如 {"sdk": "js", "version": ">=0.3"}
     hints: NotRequired[Dict[str, str]]

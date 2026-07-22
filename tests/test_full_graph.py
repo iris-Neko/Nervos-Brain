@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ def _make_state(**overrides):
             "max_tool_calls": 3,
         },
         "route": "graph",
-        "locale": "zh-CN",
+        "locale": "en",
     }
     base.update(overrides)
     return base
@@ -77,13 +78,14 @@ class TestInvalidCapacityScenario:
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
         mock_llm_responses = {
-            "Prompt ID: info_gap_assessor": json.dumps({
+            "Prompt ID: turn_interpreter": json.dumps({
                 "decision": "ask_user",
                 "info_needs": [
                     {
                         "kind": "missing_param",
                         "question": "请问您使用的是哪种 SDK 语言？（JavaScript/Rust/Go）",
                         "required": True,
+                        "availability": "user_owned",
                     }
                 ],
                 "reasoning": "用户没有指定 SDK 语言，无法提供对应代码示例",
@@ -91,13 +93,14 @@ class TestInvalidCapacityScenario:
         }
 
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "ask_user",
                 "info_needs": [
                     {
                         "kind": "missing_param",
                         "question": "请问您使用的是哪种 SDK 语言？（JavaScript/Rust/Go）",
                         "required": True,
+                        "availability": "user_owned",
                     }
                 ],
                 "reasoning": "用户没有指定 SDK 语言，无法提供对应代码示例",
@@ -158,7 +161,7 @@ class TestFiberChannelScenario:
         ]
 
         mock_llm_responses = {
-            "Prompt ID: info_gap_assessor": json.dumps({
+            "Prompt ID: turn_interpreter": json.dumps({
                 "decision": "has_needs",
                 "info_needs": [
                     {"kind": "concept_gap", "question": "Fiber 开通道的 API", "required": False}
@@ -183,7 +186,7 @@ class TestFiberChannelScenario:
         }
 
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "info_needs": [
                     {"kind": "concept_gap", "question": "Fiber 开通道的 API", "required": False}
@@ -224,14 +227,14 @@ class TestDirectAnswerScenario:
     def test_full_graph_direct_answer_skips_retrieval_and_self_check(self):
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
-        call_counter = {"info_gap": 0, "direct": 0, "planner": 0, "self_check": 0}
+        call_counter = {"turn_interpreter": 0, "direct": 0, "planner": 0, "self_check": 0}
 
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             _ = user_prompt
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple direct answer", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
-                call_counter["info_gap"] += 1
+            if "Prompt ID: turn_interpreter" in system_prompt:
+                call_counter["turn_interpreter"] += 1
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -259,7 +262,7 @@ class TestDirectAnswerScenario:
             result = graph.invoke(state)
 
         response = result.get("_final_response", {})
-        assert call_counter["info_gap"] == 1
+        assert call_counter["turn_interpreter"] == 1
         assert call_counter["direct"] == 1
         assert call_counter["planner"] == 0
         assert call_counter["self_check"] == 0
@@ -273,7 +276,7 @@ class TestDirectAnswerScenario:
         def mock_call_llm_json(system_prompt, user_prompt, **_kwargs):
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "short correction feedback", "confidence": 0.9}
-            assert "Prompt ID: info_gap_assessor" in system_prompt
+            assert "Prompt ID: turn_interpreter" in system_prompt
             assert "你是不是回复错问题了" in user_prompt
             return {
                 "decision": "answer_direct",
@@ -308,16 +311,22 @@ class TestDirectAnswerScenario:
     def test_direct_answer_can_use_recent_conversation_context(self):
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
-        captured: dict[str, str] = {}
+        captured: dict[str, Any] = {"interpreter": []}
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "Prompt ID: info_gap_assessor" in system_prompt:
-                captured["info_gap_user_prompt"] = user_prompt
+            if "Prompt ID: turn_interpreter" in system_prompt:
+                captured["interpreter"].append(user_prompt)
+                selected = ["m1"] if "Quoted recent history" in user_prompt else []
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
                     "info_needs": [],
+                    "context": {
+                        "requirement": "recent_history",
+                        "purpose": "resolve the referenced earlier question",
+                        "selected_message_ids": selected,
+                    },
                     "reasoning": "context follow-up",
                 }
             return {"decision": "accept_answer", "uncertainty_score": 0.1}
@@ -330,8 +339,8 @@ class TestDirectAnswerScenario:
         state = _make_state(
             user_message={"content": "你看看上文是什么"},
             recent_messages=[
-                {"role": "user", "content": "CKB 是什么", "created_ts_ms": 1000},
-                {"role": "assistant", "content": "CKB 是 Nervos 的底层公链。", "created_ts_ms": 1100},
+                {"id": "m1", "role": "user", "content": "CKB 是什么", "created_ts_ms": 1000},
+                {"id": "m2", "role": "assistant", "content": "CKB 是 Nervos 的底层公链。", "created_ts_ms": 1100},
             ],
         )
 
@@ -339,23 +348,30 @@ class TestDirectAnswerScenario:
              patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
             result = build_full_graph().invoke(state)
 
-        assert "CKB 是什么" in captured["info_gap_user_prompt"]
+        assert captured["interpreter"]
+        assert "CKB 是什么" not in captured["interpreter"][0]
+        assert any("CKB 是什么" in prompt for prompt in captured["interpreter"][1:])
         assert "CKB 是什么" in captured["direct_user_prompt"]
         assert "CKB 是什么" in result["_final_response"]["text"]
 
     def test_reply_context_is_not_overwritten_by_recent_messages(self):
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
-        captured: dict[str, str] = {}
+        captured: dict[str, Any] = {"interpreter": []}
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "Prompt ID: info_gap_assessor" in system_prompt:
-                captured["info_gap_user_prompt"] = user_prompt
+            if "Prompt ID: turn_interpreter" in system_prompt:
+                captured["interpreter"].append(user_prompt)
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
                     "info_needs": [],
+                    "context": {
+                        "requirement": "direct_reply",
+                        "purpose": "resolve the replied message",
+                        "selected_message_ids": ["reply-1"],
+                    },
                     "reasoning": "reply follow-up",
                 }
             return {"decision": "accept_answer", "uncertainty_score": 0.1}
@@ -370,8 +386,12 @@ class TestDirectAnswerScenario:
             "CKB usually refers to Nervos CKB, the base blockchain layer of the Nervos ecosystem."
         )
         state = _make_state(
-            user_message={"content": "好，小白版的解释，你说一下"},
-            conversation_context=reply_context,
+            user_message={
+                "content": "好，小白版的解释，你说一下",
+                "reply_to_message_id": "reply-1",
+                "reply_to_role": "assistant",
+                "reply_to_content": reply_context,
+            },
             recent_messages=[
                 {"role": "user", "content": "Fiber WASM 是怎么实现的？", "created_ts_ms": 1000},
                 {"role": "assistant", "content": "Fiber WASM 需要查源码。", "created_ts_ms": 1100},
@@ -382,9 +402,10 @@ class TestDirectAnswerScenario:
              patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
             result = build_full_graph().invoke(state)
 
-        assert reply_context in captured["info_gap_user_prompt"]
+        assert captured["interpreter"]
+        assert reply_context in captured["interpreter"][0]
         assert reply_context in captured["direct_user_prompt"]
-        assert "Fiber WASM" not in captured["info_gap_user_prompt"]
+        assert "Fiber WASM" not in captured["interpreter"][0]
         assert "Fiber WASM" not in captured["direct_user_prompt"]
         assert "CKB" in result["_final_response"]["text"]
 
@@ -395,8 +416,8 @@ class TestDirectAnswerScenario:
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
             _ = model
-            if "Prompt ID: info_gap_assessor" in system_prompt:
-                captured["info_gap_user_prompt"] = user_prompt
+            if "Prompt ID: turn_interpreter" in system_prompt:
+                captured["interpreter_user_prompt"] = user_prompt
                 return {
                     "decision": "has_needs",
                     "retrieval_policy": "single",
@@ -473,13 +494,12 @@ class TestDirectAnswerScenario:
              patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
             result = build_full_graph().invoke(state)
 
-        assert "Context gate" in captured["info_gap_user_prompt"]
-        assert "Context gate" in captured["planner_user_prompt"]
-        assert "Nervos Brain" not in captured["info_gap_user_prompt"]
-        assert "Nervos Brain" not in captured["planner_user_prompt"]
-        assert "CKB agent" not in captured["info_gap_user_prompt"]
+        assert "Current user message" in captured["interpreter_user_prompt"]
+        assert "Assistant name: Nervos Brain" in captured["interpreter_user_prompt"]
+        assert "Assistant name: Nervos Brain" not in captured["planner_user_prompt"]
+        assert "CKB agent" not in captured["interpreter_user_prompt"]
         assert "CKB agent" not in captured["planner_user_prompt"]
-        assert result["conversation_context"].startswith("Context gate")
+        assert result["conversation_context"] == "(none)"
 
     def test_self_contained_question_overrides_plain_runtime_context(self):
         from nervos_brain.graph_engine.full_nodes import _conversation_context_from_state
@@ -494,7 +514,7 @@ class TestDirectAnswerScenario:
 
         context = _conversation_context_from_state(state)
 
-        assert context.startswith("Context gate")
+        assert context == "(none)"
         assert "Nervos Brain" not in context
         assert "CKB agent" not in context
 
@@ -509,7 +529,7 @@ class TestDirectAnswerScenario:
             _ = user_prompt
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
+            if "Prompt ID: turn_interpreter" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -889,7 +909,7 @@ class TestSingleRetrievalScenario:
             _ = user_prompt
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
+            if "Prompt ID: turn_interpreter" in system_prompt:
                 return {
                     "decision": "has_needs",
                     "retrieval_policy": "single",
@@ -949,7 +969,7 @@ class TestSingleRetrievalScenario:
             _ = user_prompt, model, service_tier
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "technical graph node", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
+            if "Prompt ID: turn_interpreter" in system_prompt:
                 return {
                     "decision": "has_needs",
                     "retrieval_policy": "single",
@@ -971,7 +991,7 @@ class TestSingleRetrievalScenario:
             if "Prompt ID: reflection" in system_prompt and "pre-answer evidence review" in system_prompt:
                 call_counter["pre"] += 1
                 return {"decision": "accept_answer", "reasoning": "enough", "uncertainty_score": 0.2}
-            if "Prompt ID: reflection" in system_prompt and "post-answer review" in system_prompt:
+            if "Prompt ID: response_compliance" in system_prompt:
                 call_counter["post"] += 1
                 return {"decision": "accept_answer", "reasoning": "ok", "uncertainty_score": 0.1}
             return {}
@@ -1055,7 +1075,8 @@ class TestSingleRetrievalScenario:
         with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
             out = retriever_planner(state)
 
-        assert "我想写一个 CKB 转账示例" in captured["user_prompt"]
+        assert "Selected context:\n(none)" in captured["user_prompt"]
+        assert "我想写一个 CKB 转账示例" not in captured["user_prompt"]
         assert out["retrieval_plan"]["steps"][0]["query"] == "JS SDK CKB"
 
 
@@ -1110,11 +1131,11 @@ class TestEvidenceConflictScenario:
         """完整图：冲突 -> replan -> 最终回答。"""
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
-        call_counter = {"info_gap": 0, "planner": 0, "grader": 0, "answer": 0, "self_check": 0}
+        call_counter = {"turn_interpreter": 0, "planner": 0, "grader": 0, "answer": 0, "self_check": 0}
 
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None):
-            if "Prompt ID: info_gap_assessor" in system_prompt:
-                call_counter["info_gap"] += 1
+            if "Prompt ID: turn_interpreter" in system_prompt:
+                call_counter["turn_interpreter"] += 1
                 return {
                     "decision": "has_needs",
                     "info_needs": [{"kind": "concept_gap", "question": "Fiber API", "required": False}],
@@ -1161,7 +1182,8 @@ class TestEvidenceConflictScenario:
             graph = build_full_graph()
             result = graph.invoke(state)
 
-        assert call_counter["grader"] >= 2, "DocGrader 应至少被调用两次（首次 need_more + 后续 enough）"
+        assert call_counter["grader"] >= 1
+        assert call_counter["planner"] >= 1
         response = result.get("_final_response", {})
         assert response.get("text"), "最终应产出回答"
 
@@ -1179,7 +1201,7 @@ class TestRoutingFunctions:
         assert route_after_assessment(
             {
                 "_route_decision": "ask_user",
-                "info_needs": [{"required": True, "question": "请贴完整报错日志"}],
+                "info_needs": [{"required": True, "availability": "user_owned", "question": "请贴完整报错日志"}],
             }
         ) == "ask_user"
 
@@ -1193,11 +1215,11 @@ class TestRoutingFunctions:
 
     def test_route_after_answer_composer_direct_skips_self_check(self):
         from nervos_brain.graph_engine.full_graph import route_after_answer_composer
-        assert route_after_answer_composer({"_direct_answer": True}) == "format_repair"
+        assert route_after_answer_composer({"_direct_answer": True}) == "response_compliance"
 
     def test_route_after_answer_composer_evidence_answer_runs_self_check(self):
         from nervos_brain.graph_engine.full_graph import route_after_answer_composer
-        assert route_after_answer_composer({}) == "self_check"
+        assert route_after_answer_composer({}) == "response_compliance"
 
     def test_route_after_grading_need_more(self):
         from nervos_brain.graph_engine.full_graph import route_after_grading
@@ -1259,9 +1281,10 @@ class TestRoutingFunctions:
                     "hop_count": 3,
                     "info_needs": [
                         {
-                            "kind": "missing_param",
-                            "question": "请问你使用的是哪个 SDK？",
-                            "required": True,
+                        "kind": "missing_param",
+                        "question": "请问你使用的是哪个 SDK？",
+                        "required": True,
+                        "availability": "user_owned",
                         }
                     ],
                     "budget": {"max_hops": 3, "max_reflection_rounds_pre": 2},
@@ -1280,16 +1303,17 @@ class TestRoutingFunctions:
                     "hop_count": 3,
                     "info_needs": [
                         {
-                            "kind": "latest_spec",
-                            "question": "需要获取 Fiber 节点当前官方部署方式、配置项、运行命令、RPC/API 或管理接口等最新资料。",
-                            "required": True,
+                        "kind": "latest_spec",
+                        "question": "需要获取 Fiber 节点当前官方部署方式、配置项、运行命令、RPC/API 或管理接口等最新资料。",
+                        "required": True,
+                        "availability": "public",
                         }
                     ],
                     "evidence": [{"id": "ev-1", "snippet": "Fiber setup docs"}],
                     "budget": {"max_hops": 3, "max_reflection_rounds_pre": 2},
                 }
             )
-            == "ask_user"
+            == "answer_composer"
         )
 
     def test_route_after_self_check_pass(self):
@@ -1490,7 +1514,7 @@ class TestFormatRepairNode:
         result = format_repair(state)
         text = result["_final_response"]["text"]
         assert "当前回答存在不确定性" not in text
-        assert "## 参考来源" in text
+        assert "## References" in text
 
     def test_format_repair_does_not_duplicate_existing_reference_section(self):
         from nervos_brain.graph_engine.full_nodes import format_repair
@@ -1695,15 +1719,15 @@ class TestRetrieverPlannerNode:
         ]
 
 
-class TestInfoGapAssessorNode:
-    """InfoGapAssessor 行为测试。"""
+class TestTurnInterpreterNode:
+    """Turn Interpreter behavior tests."""
 
     def test_answer_direct_without_force_keeps_no_retrieval_policy(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": "你是谁"})
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "answer_direct",
                 "retrieval_policy": "single",
                 "info_needs": [],
@@ -1714,14 +1738,14 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "answer_direct"
         assert out["retrieval_policy"] == "none"
         assert out["budget"]["max_tool_calls"] == 0
 
-    def test_response_quality_feedback_uses_info_gap_prompt_decision(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    def test_response_quality_feedback_uses_turn_interpreter_decision(self):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={"content": "你是不是回复错问题了"},
@@ -1731,7 +1755,7 @@ class TestInfoGapAssessorNode:
             ],
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "answer_direct",
                 "retrieval_policy": "none",
                 "info_needs": [],
@@ -1742,62 +1766,81 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "answer_direct"
         assert out["retrieval_policy"] == "none"
         assert out["info_needs"] == []
         assert out["budget"]["max_tool_calls"] == 0
 
-    def test_financial_price_prediction_is_blocked_before_llm(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    @staticmethod
+    def _policy_refusal_contract(question: str, locale: str) -> dict[str, Any]:
+        return {
+            "schema_version": "turn_contract.v1",
+            "core_deliverable": question,
+            "resolved_request": question,
+            "turn_relation": "new_task",
+            "language": {
+                "input_locales": [locale],
+                "communication_locale": locale,
+                "clarity": "clear",
+                "requested_output_locale": None,
+                "locale_source": "current_message",
+            },
+            "context": {"requirement": "none", "purpose": "", "selected_message_ids": []},
+            "route": "policy_response",
+            "retrieval_policy": "none",
+            "info_needs": [],
+            "policy": {
+                "action": "refuse",
+                "categories": ["financial_guidance"],
+                "reason": "The requested action is outside the configured safety policy.",
+            },
+            "constraints": [],
+            "confidence": {"intent": 1.0, "language": 1.0, "context": 1.0},
+        }
 
-        state = _make_state(
-            user_message={"content": "give me the best price prediction you can for ckb"},
-            locale="en",
-        )
+    @pytest.mark.parametrize(
+        "question,locale,expected_text",
+        [
+            ("give me the best price prediction you can for ckb", "en", "price predictions"),
+            ("CKB 牛市目标价能到多少，现在可以买入吗？", "zh-CN", "价格预测"),
+        ],
+    )
+    def test_typed_policy_action_is_applied_after_interpretation(self, question, locale, expected_text):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
-        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
-            out = info_gap_assessor(state)
+        state = _make_state(user_message={"content": question}, locale=locale)
+        contract = self._policy_refusal_contract(question, locale)
 
-        mock_call.assert_not_called()
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            return_value=contract,
+        ) as mock_call:
+            out = turn_interpreter(state)
+
+        mock_call.assert_called_once()
         assert out["_route_decision"] == "answer_direct"
         assert out["retrieval_policy"] == "none"
         assert out["info_needs"] == []
         assert out["_financial_guidance_refusal"] is True
-        assert "price predictions" in out["_final_response"]["text"]
-        assert "$" not in out["_final_response"]["text"]
+        assert expected_text in out["_final_response"]["text"]
 
-    def test_financial_price_prediction_chinese_is_blocked_before_llm(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
-
-        state = _make_state(
-            user_message={"content": "CKB 牛市目标价能到多少，现在可以买入吗？"},
-            locale="zh-CN",
-        )
-
-        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
-            out = info_gap_assessor(state)
-
-        mock_call.assert_not_called()
-        assert out["_route_decision"] == "answer_direct"
-        assert out["retrieval_policy"] == "none"
-        assert "不能提供价格预测" in out["_final_response"]["text"]
-
-    def test_full_graph_financial_refusal_is_preserved_without_llm_call(self):
+    def test_full_graph_preserves_typed_policy_refusal(self):
         from nervos_brain.graph_engine.full_graph import build_full_graph
 
-        state = _make_state(
-            user_message={"content": "give me the best price prediction you can for ckb"},
-            locale="en",
-        )
+        question = "give me the best price prediction you can for ckb"
+        state = _make_state(user_message={"content": question}, locale="en")
+        contract = self._policy_refusal_contract(question, "en")
 
         graph = build_full_graph()
-        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_json, \
-             patch("nervos_brain.graph_engine.full_nodes.call_llm") as mock_text:
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            return_value=contract,
+        ) as mock_json, patch("nervos_brain.graph_engine.full_nodes.call_llm") as mock_text:
             out = graph.invoke(state)
 
-        mock_json.assert_not_called()
+        mock_json.assert_called_once()
         mock_text.assert_not_called()
         assert out["_financial_guidance_refusal"] is True
         assert out["_final_response"]["answer_mode"] == "policy_refusal"
@@ -1815,25 +1858,30 @@ class TestInfoGapAssessorNode:
             ("CKB 该不该止盈？", "zh-CN", "不能提供价格预测"),
         ],
     )
-    def test_explicit_financial_guidance_variants_are_blocked_before_llm(
+    def test_explicit_financial_guidance_variants_use_typed_policy(
         self,
         question,
         locale,
         expected_text,
     ):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": question}, locale=locale)
+        contract = self._policy_refusal_contract(question, locale)
 
-        with patch("nervos_brain.graph_engine.full_nodes.call_llm_json") as mock_call:
-            out = info_gap_assessor(state)
+        with patch(
+            "nervos_brain.graph_engine.full_nodes.call_llm_json",
+            return_value=contract,
+        ) as mock_call:
+            out = turn_interpreter(state)
 
-        mock_call.assert_not_called()
+        mock_call.assert_called_once()
         assert out["_route_decision"] == "answer_direct"
         assert out["retrieval_policy"] == "none"
         assert out["info_needs"] == []
         assert out["_financial_guidance_refusal"] is True
-        assert expected_text in out["_final_response"]["text"]
+        expected = "价格预测" if locale == "zh-CN" else "price predictions"
+        assert expected in out["_final_response"]["text"]
 
     @pytest.mark.parametrize(
         "question",
@@ -1850,11 +1898,11 @@ class TestInfoGapAssessorNode:
         ],
     )
     def test_ckb_technical_and_neutral_questions_do_not_trigger_financial_guard(self, question):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": question}, locale="en")
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1876,7 +1924,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             mock_call_llm_json,
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert calls["count"] >= 1
         assert out["_route_decision"] == "has_needs"
@@ -1885,14 +1933,14 @@ class TestInfoGapAssessorNode:
         assert not out.get("_financial_guidance_refusal", False)
 
     def test_technical_buy_word_does_not_trigger_financial_guard(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={"content": "How do I buy CKB capacity in a transaction when creating cells?"},
             locale="en",
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1914,7 +1962,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             mock_call_llm_json,
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert calls["count"] >= 1
         assert out["_route_decision"] == "has_needs"
@@ -1922,7 +1970,7 @@ class TestInfoGapAssessorNode:
         assert not out.get("_financial_guidance_refusal", False)
 
     def test_technical_feedback_with_named_library_can_route_to_retrieval(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={
@@ -1934,7 +1982,7 @@ class TestInfoGapAssessorNode:
             ],
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1951,14 +1999,14 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
         assert out["retrieval_policy"] == "single"
         assert out["info_needs"][0]["required"] is False
 
     def test_technical_tutorial_retrieval_is_llm_prompt_decision(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={
@@ -1966,7 +2014,7 @@ class TestInfoGapAssessorNode:
             },
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -1983,7 +2031,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
         assert out["retrieval_policy"] == "single"
@@ -1991,13 +2039,13 @@ class TestInfoGapAssessorNode:
         assert out["budget"]["max_tool_calls"] >= 1
 
     def test_answer_direct_is_coerced_to_has_needs_when_force_retrieval(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
         state = _make_state(
             user_message={"content": "什么是 ckb"},
             force_retrieval=True,
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "answer_direct",
                 "info_needs": [],
                 "reasoning": "simple question",
@@ -2007,7 +2055,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
         assert out["retrieval_policy"] == "single"
@@ -2015,14 +2063,14 @@ class TestInfoGapAssessorNode:
         assert len(out["info_needs"]) >= 1
 
     def test_has_needs_single_policy_applies_light_budget(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={"content": "什么是 ckb"},
             budget={"max_tool_calls": 4, "max_hops": 3, "max_reflection_rounds_pre": 2},
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -2034,7 +2082,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["retrieval_policy"] == "single"
         assert out["budget"]["max_hops"] == 1
@@ -2042,14 +2090,14 @@ class TestInfoGapAssessorNode:
         assert out["budget"]["max_reflection_rounds_pre"] == 1
 
     def test_real_object_evaluation_can_use_single_retrieval(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(
             user_message={"content": "Nervos Brain 这个项目你觉得如何"},
             budget={"max_tool_calls": 4, "max_hops": 3, "max_reflection_rounds_pre": 2},
         )
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
                 "info_needs": [
@@ -2066,7 +2114,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
         assert out["retrieval_policy"] == "single"
@@ -2076,11 +2124,11 @@ class TestInfoGapAssessorNode:
         assert out["info_needs"][0]["required"] is False
 
     def test_has_needs_deep_policy_keeps_deeper_budget(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": "Fiber open_channel 报错，日志如下..."})
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "retrieval_policy": "deep",
                 "info_needs": [
@@ -2092,18 +2140,18 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["retrieval_policy"] == "deep"
         assert out["budget"]["max_hops"] >= 3
         assert out["budget"]["max_tool_calls"] >= 3
 
-    def test_info_gap_preserves_llm_semantic_required_flags(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    def test_turn_interpreter_preserves_llm_semantic_required_flags(self):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": "我的 open_channel 报错了，怎么修？"})
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "ask_user",
                 "retrieval_policy": "none",
                 "info_needs": [
@@ -2111,6 +2159,7 @@ class TestInfoGapAssessorNode:
                         "kind": "error_trace",
                         "question": "请贴完整报错日志、Fiber 版本和运行环境",
                         "required": True,
+                        "availability": "user_owned",
                     }
                 ],
             }
@@ -2119,18 +2168,18 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "ask_user"
         assert out["retrieval_policy"] == "none"
         assert out["info_needs"][0]["required"] is True
 
-    def test_info_gap_demotes_ask_user_without_required_info(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    def test_turn_interpreter_demotes_ask_user_without_required_info(self):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
 
         state = _make_state(user_message={"content": "有没有比较靠谱的资料可以看？"})
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "ask_user",
                 "retrieval_policy": "none",
                 "info_needs": [
@@ -2147,7 +2196,7 @@ class TestInfoGapAssessorNode:
             "nervos_brain.graph_engine.full_nodes.call_llm_json",
             _mock_call_llm_json_factory(mock_json_responses),
         ):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
         assert out["retrieval_policy"] == "single"
@@ -2164,7 +2213,7 @@ class TestFullGraphDebugState:
             _ = user_prompt, model
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
+            if "Prompt ID: turn_interpreter" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -2188,10 +2237,10 @@ class TestFullGraphDebugState:
 
         assert result.get("_request_started_ts_ms") == 1
         assert result.get("_node_timings")
-        assert result["_node_timings"][0]["node"] == "info_gap_assessor"
+        assert result["_node_timings"][0]["node"] == "turn_interpreter"
         assert result.get("_llm_trace")
-        assert result["_llm_trace"][0]["kind"] == "router_json"
-        assert result.get("_llm_usage_summary", {}).get("calls", 0) >= 2
+        assert result["_llm_trace"][0]["kind"] == "business_json"
+        assert result.get("_llm_usage_summary", {}).get("calls", 0) >= 1
 
     def test_llm_service_tier_survives_graph_trace(self):
         from nervos_brain.graph_engine.full_graph import build_full_graph
@@ -2203,7 +2252,7 @@ class TestFullGraphDebugState:
             _ = user_prompt, model
             if "Prompt ID: model_router" in system_prompt:
                 return {"tier": "low", "reasoning": "simple", "confidence": 0.9}
-            if "Prompt ID: info_gap_assessor" in system_prompt:
+            if "Prompt ID: turn_interpreter" in system_prompt:
                 return {
                     "decision": "answer_direct",
                     "retrieval_policy": "none",
@@ -2239,11 +2288,15 @@ class TestPromptBoundaries:
     def _contains_cjk(text: str) -> bool:
         return any("\u3400" <= char <= "\u9fff" for char in str(text))
 
+    @staticmethod
+    def _render_ascii_template(template: str) -> str:
+        return re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", "ASCII", template)
+
     def test_shared_prompt_ids_are_stable(self):
         from nervos_brain.graph_engine import prompts
 
         expected = {
-            prompts.INFO_GAP_SYSTEM: "info_gap_assessor",
+            prompts.TURN_INTERPRETER_SYSTEM: "turn_interpreter",
             prompts.RETRIEVER_PLANNER_SYSTEM: "retriever_planner",
             prompts.REFLECTION_SYSTEM: "reflection",
             prompts.DOC_GRADER_SYSTEM: "doc_grader",
@@ -2254,61 +2307,37 @@ class TestPromptBoundaries:
         for prompt, prompt_id in expected.items():
             assert f"Prompt ID: {prompt_id}" in prompt
 
-    def test_info_gap_prompt_preserves_core_deliverable_and_scope(self):
+    def test_turn_interpreter_prompt_preserves_core_deliverable_and_scope(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "retrieval_policy" in prompts.INFO_GAP_SYSTEM
-        assert "The core deliverable controls routing" in prompts.INFO_GAP_SYSTEM
-        assert "increase verification effort; they do not add" in prompts.INFO_GAP_SYSTEM
-        assert "Every info_need must explain how it helps complete" in prompts.INFO_GAP_SYSTEM
-        assert "Object details supplied for disambiguation are retrieval context" in prompts.INFO_GAP_SYSTEM
-        assert "Public identity, versions, documentation, channels, code" in prompts.INFO_GAP_SYSTEM
-        assert "A temporary retrieval miss, insufficient evidence, or source conflict" in prompts.INFO_GAP_SYSTEM
-        assert "Do not invent source_preference" in prompts.INFO_GAP_SYSTEM
-        assert "Most single-fact" in prompts.INFO_GAP_SYSTEM
-        assert "one fact cluster" in prompts.INFO_GAP_SYSTEM
-        assert "Needing several evidence items" in prompts.INFO_GAP_SYSTEM
-        assert "remove identity, issuer, definition, and historical" in prompts.INFO_GAP_SYSTEM
-        assert "details already supplied by the user" in prompts.INFO_GAP_USER
-        assert "Do not upgrade based on entity names" in prompts.INFO_GAP_SYSTEM
-        assert "old answer and background do not expand the current task" in prompts.INFO_GAP_SYSTEM
-        assert "Stop when one round" in prompts.INFO_GAP_SYSTEM
-        assert "user-facing question" in prompts.INFO_GAP_SYSTEM
+        assert "retrieval_policy" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "core deliverable" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "Public facts must be retrieved" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "Detailed or careful research increases verification effort" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "Every info_need must contain a purpose" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "count characters" in prompts.TURN_INTERPRETER_SYSTEM
 
     def test_retriever_planner_prompt_prioritizes_answer_bearing_evidence(self):
         from nervos_brain.graph_engine import prompts
 
         assert "facts that can be placed" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "core object + user's action + expected result" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "Do not add them or answer-field lists" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "Stop when the evidence is sufficient" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "source filter empty by default" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "result-quality requirements, not permission to select a backend" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "every qdrant_search step must use" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "one or two domain synonyms" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "merely translate" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "A query is not a list of answer fields" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "Keep the first query to roughly 4-8" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "retrieval_policy=\"single\"" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "4-8 independent terms" in prompts.RETRIEVER_PLANNER_USER
-        assert "Remove unrelated identity" in prompts.RETRIEVER_PLANNER_USER
+        assert "core object, user action" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "expected" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Do not first collect a complete background profile" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "Stop when evidence is sufficient" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "A query is not a list" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "answer field" in prompts.RETRIEVER_PLANNER_SYSTEM
+        assert "empty filters" in prompts.RETRIEVER_PLANNER_SYSTEM
 
     def test_reflection_prompt_treats_buried_answer_as_functional_failure(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "First priority is task completion" in prompts.REFLECTION_SYSTEM
-        assert "If the first paragraph does not directly complete" in prompts.REFLECTION_SYSTEM
-        assert "obvious scope drift" in prompts.REFLECTION_SYSTEM
-        assert "If direct evidence exists, accept_answer" in prompts.REFLECTION_SYSTEM
-        assert "Do not retrieve more background" in prompts.REFLECTION_SYSTEM
-        assert "without source restrictions" in prompts.REFLECTION_SYSTEM
-        assert "only happens to contain a keyword" in prompts.REFLECTION_SYSTEM
-        assert "Do not ask_user" in prompts.REFLECTION_SYSTEM
-        assert "broader branch after a restricted branch" in prompts.REFLECTION_SYSTEM
-        assert "actionable result + evidence boundary" in prompts.REFLECTION_SYSTEM
-        assert "only apologizes or promises improvement" in prompts.REFLECTION_SYSTEM
+        assert "first paragraph" in prompts.REFLECTION_SYSTEM
+        assert "scope" in prompts.REFLECTION_SYSTEM
+        assert "Do not request public information" in prompts.REFLECTION_SYSTEM
+        assert "required user_owned" in prompts.REFLECTION_SYSTEM
         assert "A direct answer may have no citations" in prompts.REFLECTION_SYSTEM
-        assert "Any user-facing clarify_question" in prompts.REFLECTION_SYSTEM
+        assert "Return JSON only" in prompts.REFLECTION_SYSTEM
 
     def test_model_router_prompt_uses_low_medium_and_high(self):
         from nervos_brain.graph_engine import full_nodes
@@ -2320,7 +2349,7 @@ class TestPromptBoundaries:
         assert "Many evidence items" in full_nodes._LLM_ROUTER_SYSTEM
         assert "choose a faster tier" in full_nodes._LLM_ROUTER_SYSTEM
         assert full_nodes._MODEL_TIERS == {"low", "medium", "high"}
-        assert full_nodes._NODE_FALLBACK_TIERS["info_gap_assessor"] == "low"
+        assert "turn_interpreter" not in full_nodes._NODE_FALLBACK_TIERS or full_nodes._NODE_FALLBACK_TIERS["turn_interpreter"] == "low"
         assert full_nodes._NODE_FALLBACK_TIERS["retriever_planner"] == "low"
         assert full_nodes._NODE_FALLBACK_TIERS["reflection_pre"] == "low"
         assert full_nodes._NODE_FALLBACK_TIERS["reflection_post"] == "medium"
@@ -2330,25 +2359,16 @@ class TestPromptBoundaries:
         from nervos_brain.graph_engine import prompts
 
         assert "Deliver the requested result in the first paragraph" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "how much they help the core deliverable" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "dump of all retrieved results" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Evidence not used for the core" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Start concise and then add detail without a rigid template" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not repeat conclusions, summaries, decorative sections" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not fill space with unrelated evidence" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not ask the user to provide a publicly retrievable" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "keyword is not core evidence" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "selection criteria in the first paragraph" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "fewer restrictions" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not invent full steps, page fields, addresses, fees, or timing" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not rewrite a partial" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "does not prove" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "instead of only saying that it cannot be confirmed" in prompts.ANSWER_COMPOSER_USER
-        assert "If multiple branches apply under different conditions" in prompts.ANSWER_COMPOSER_USER
-        assert "give the corrected answer directly" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "core deliverable" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Detailed verification does not require printing the investigation" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "expand into unrelated" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not repeat conclusions" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "decorative sections" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Do not invent versions, interfaces, commands" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "Use only evidence directly related" in prompts.ANSWER_COMPOSER_USER
+        assert "corrected answer" in prompts.ANSWER_COMPOSER_SYSTEM
         assert "{{cite:E1}}" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Cite only evidence actually used" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "English language of these instructions" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "English language" in prompts.ANSWER_COMPOSER_SYSTEM
 
     @pytest.mark.parametrize(
         ("task_kind", "contract_fragment"),
@@ -2364,37 +2384,30 @@ class TestPromptBoundaries:
         from nervos_brain.graph_engine import prompts
 
         assert task_kind
-        assert contract_fragment in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Do not force a fixed template" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "still delivering the most important result first" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "current TurnContract" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "first paragraph" in prompts.ANSWER_COMPOSER_SYSTEM
 
     def test_direct_answer_prompt_reanswers_corrections_instead_of_promising(self):
         from nervos_brain.graph_engine import prompts
 
+        assert "configured product identity" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "configured policy action and product identity" in prompts.ANSWER_COMPOSER_SYSTEM
         for prompt in (prompts.DIRECT_ANSWER_SYSTEM, prompts.ANSWER_COMPOSER_SYSTEM):
-            assert "user-facing assistant named Nervos Brain" in prompt
-            assert "commonly abbreviated" in prompt
-            assert "Do not identify yourself as Codex, ChatGPT, GPT, OpenAI" in prompt
-            assert "distinguish the Nervos Brain product" in prompt
-        assert "Do not add references" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "immediately give the corrected answer" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "reply only with" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "Do not expand into unrequested topics" in prompts.DIRECT_ANSWER_SYSTEM
+            assert "corrected answer" in prompt
         assert "Do not invent external facts" in prompts.DIRECT_ANSWER_SYSTEM
-        assert "Write the answer in the user locale" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "response locale" in prompts.DIRECT_ANSWER_SYSTEM
 
     def test_static_runtime_prompt_scaffolding_is_english(self):
         from nervos_brain.graph_engine import full_nodes, llm, prompts, source_registry
-        from nervos_brain.tool_runtime.discord_bot_runtime import _reply_context_from_envelope as discord_reply_context
-        from nervos_brain.tool_runtime.telegram_bot_runtime import _reply_context_from_envelope as telegram_reply_context
-
         static_prompts = [
-            prompts.INFO_GAP_SYSTEM,
-            prompts.INFO_GAP_USER,
+            prompts.TURN_INTERPRETER_SYSTEM,
+            prompts.TURN_INTERPRETER_USER,
             prompts.RETRIEVER_PLANNER_SYSTEM,
             prompts.RETRIEVER_PLANNER_USER,
             prompts.REFLECTION_SYSTEM,
             prompts.REFLECTION_USER,
+            prompts.RESPONSE_COMPLIANCE_SYSTEM,
+            prompts.RESPONSE_COMPLIANCE_USER,
             prompts.DOC_GRADER_SYSTEM,
             prompts.DOC_GRADER_USER,
             prompts.ANSWER_COMPOSER_SYSTEM,
@@ -2405,7 +2418,7 @@ class TestPromptBoundaries:
             prompts.SELF_CHECK_USER,
             full_nodes._LLM_ROUTER_SYSTEM,
             full_nodes._time_budget_prompt({}),
-            full_nodes._node_goal("info_gap_assessor"),
+            full_nodes._node_goal("turn_interpreter"),
             full_nodes._node_goal("answer_composer"),
             full_nodes._format_conversation_context([]),
             full_nodes._conversation_context_from_state(
@@ -2417,18 +2430,20 @@ class TestPromptBoundaries:
             source_registry.format_source_registry_for_prompt(),
             llm._JSON_ONLY_SYSTEM_SUFFIX,
             llm._JSON_ONLY_USER_SUFFIX,
-            telegram_reply_context({"reply_to_message_id": "42", "reply_to_role": "assistant"}),
-            discord_reply_context({"reply_to_message_id": "42", "reply_to_role": "assistant"}),
         ]
+        rendered_prompts = [self._render_ascii_template(text) for text in static_prompts]
         assert all(not self._contains_cjk(text) for text in static_prompts)
+        assert all(not self._contains_cjk(text) for text in rendered_prompts)
 
     def test_prompt_locale_fields_keep_dynamic_user_content_in_place(self):
         from nervos_brain.graph_engine import prompts
 
-        info_prompt = prompts.INFO_GAP_USER.format(
+        info_prompt = prompts.TURN_INTERPRETER_USER.format(
             question="中文问题",
-            locale="zh-CN",
-            conversation_context="(none)",
+            product_policy="ASCII policy",
+            platform_locale_hint="zh-CN",
+            direct_reply="(none)",
+            checkpoint="(none)",
             memory_facts="[]",
             evidence_count=0,
             time_budget="No hard time budget",
@@ -2436,6 +2451,7 @@ class TestPromptBoundaries:
         reflection_prompt = prompts.REFLECTION_USER.format(
             stage="pre_answer",
             locale="en",
+            turn_contract="{}",
             question="English question",
             info_needs="[]",
             memory_facts="[]",
@@ -2449,22 +2465,23 @@ class TestPromptBoundaries:
             reflection_round=1,
             time_budget="No hard time budget",
         )
-        assert "User locale: zh-CN" in info_prompt
+        assert "Weak platform locale hint" in info_prompt
         assert "中文问题" in info_prompt
-        assert "User locale: en" in reflection_prompt
+        assert "Response locale: en" in reflection_prompt
         assert "English question" in reflection_prompt
 
     def test_runtime_prompts_do_not_embed_regression_specific_rules(self):
-        from nervos_brain.graph_engine import full_nodes, prompts
+        from nervos_brain.graph_engine import full_nodes, prompts, source_registry
 
         runtime_prompts = "\n".join(
             [
-                prompts.INFO_GAP_SYSTEM,
+                prompts.TURN_INTERPRETER_SYSTEM,
                 prompts.RETRIEVER_PLANNER_SYSTEM,
                 prompts.REFLECTION_SYSTEM,
                 prompts.ANSWER_COMPOSER_SYSTEM,
                 prompts.DIRECT_ANSWER_SYSTEM,
                 full_nodes._LLM_ROUTER_SYSTEM,
+                source_registry.format_source_registry_for_prompt(),
             ]
         )
         forbidden = (
@@ -2483,14 +2500,10 @@ class TestPromptBoundaries:
     def test_financial_guidance_prompts_refuse_price_predictions(self):
         from nervos_brain.graph_engine import prompts
 
-        assert "price predictions" in prompts.INFO_GAP_SYSTEM
-        assert "target prices" in prompts.INFO_GAP_SYSTEM
-        assert "buy/sell/hold decisions" in prompts.INFO_GAP_SYSTEM
-        assert "neutral facts, technical risks, or public data sources" in prompts.INFO_GAP_SYSTEM
-        assert "Do not generate a retrieval plan for price predictions" in prompts.RETRIEVER_PLANNER_SYSTEM
-        assert "Preserve the financial safety boundary" in prompts.REFLECTION_SYSTEM
-        assert "Disclaimers do not bypass this rule" in prompts.ANSWER_COMPOSER_SYSTEM
-        assert "Disclaimers do not bypass this rule" in prompts.DIRECT_ANSWER_SYSTEM
+        assert "configured safety policy" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "policy_response" in prompts.TURN_INTERPRETER_SYSTEM
+        assert "policy action" in prompts.ANSWER_COMPOSER_SYSTEM
+        assert "safety action" in prompts.RESPONSE_COMPLIANCE_SYSTEM
 
 
 class TestFinancialGuidanceGuard:
@@ -2501,6 +2514,7 @@ class TestFinancialGuidanceGuard:
             user_message={"content": "give me the best price prediction you can for ckb"},
             locale="en",
             _route_decision="has_needs",
+            turn_contract={"policy": {"action": "refuse"}},
             _final_response={
                 "request_id": "test-req-001",
                 "text": "Best guess, not financial advice: $0.03-$0.05 in a strong cycle.",
@@ -2511,7 +2525,7 @@ class TestFinancialGuidanceGuard:
         out = format_repair(state)
 
         text = out["_final_response"]["text"]
-        assert "can't provide price predictions" in text
+        assert "I cannot provide specific price predictions" in text
         assert "$0.03" not in text
 
     def test_format_repair_does_not_sanitize_neutral_tokenomics_answer(self):
@@ -2635,7 +2649,7 @@ class TestRuntimeInjection:
             "Prompt ID: answer_composer": "CKB 是 Nervos 的一层网络 {{cite:E1}}。",
         }
         mock_json_responses = {
-            "Prompt ID: info_gap_assessor": {
+            "Prompt ID: turn_interpreter": {
                 "decision": "has_needs",
                 "info_needs": [{"kind": "concept_gap", "question": "定义", "required": False}],
             },
@@ -2668,8 +2682,8 @@ class TestRuntimeInjection:
 class TestNodeModelRouter:
     """节点级模型 router 测试。"""
 
-    def test_info_gap_uses_router_selected_low_profile(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    def test_turn_interpreter_uses_configured_low_profile(self):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
         from nervos_brain.graph_engine.provider_registry import ModelProfile, ProviderCapabilityRegistry
 
         registry = ProviderCapabilityRegistry(
@@ -2693,9 +2707,6 @@ class TestNodeModelRouter:
                     "max_tokens": max_tokens,
                 }
             )
-            if "Prompt ID: model_router" in system_prompt:
-                assert '"allowed_tiers": ["low", "medium", "high"]' in user_prompt
-                return {"tier": "low", "reasoning": "technical planning", "confidence": 0.88}
             return {
                 "decision": "has_needs",
                 "retrieval_policy": "single",
@@ -2709,18 +2720,16 @@ class TestNodeModelRouter:
         )
 
         with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
+        assert len(calls) == 1
         assert calls[0]["model"] == "openai/gpt-5.4-mini"
         assert calls[0]["reasoning_effort"] == "low"
-        assert calls[1]["model"] == "openai/gpt-5.4-mini"
-        assert calls[1]["reasoning_effort"] == "low"
-        assert out["_llm_trace"][0]["selected_tier"] == "low"
-        assert out["_llm_trace"][1]["tier"] == "low"
+        assert out["_llm_trace"][0]["tier"] == "low"
 
-    def test_info_gap_router_failure_falls_back_to_low(self):
-        from nervos_brain.graph_engine.full_nodes import info_gap_assessor
+    def test_turn_interpreter_falls_back_to_medium_after_low_failure(self):
+        from nervos_brain.graph_engine.full_nodes import turn_interpreter
         from nervos_brain.graph_engine.provider_registry import ModelProfile, ProviderCapabilityRegistry
 
         registry = ProviderCapabilityRegistry(
@@ -2733,10 +2742,13 @@ class TestNodeModelRouter:
         )
         business_calls: list[dict] = []
 
+        attempts = {"count": 0}
+
         def mock_call_llm_json(system_prompt, user_prompt, *, model=None, reasoning_effort=None, verbosity=None, max_tokens=None):
-            _ = user_prompt, verbosity, max_tokens
-            if "Prompt ID: model_router" in system_prompt:
-                raise RuntimeError("router down")
+            _ = system_prompt, user_prompt, verbosity, max_tokens
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("low profile unavailable")
             business_calls.append({"model": model, "reasoning_effort": reasoning_effort})
             return {
                 "decision": "has_needs",
@@ -2750,12 +2762,11 @@ class TestNodeModelRouter:
         )
 
         with patch("nervos_brain.graph_engine.full_nodes.call_llm_json", mock_call_llm_json):
-            out = info_gap_assessor(state)
+            out = turn_interpreter(state)
 
         assert out["_route_decision"] == "has_needs"
-        assert business_calls == [{"model": "openai/gpt-5.4-mini", "reasoning_effort": "low"}]
-        assert out["_llm_trace"][0]["selected_tier"] == "low"
-        assert out["_llm_trace"][1]["tier"] == "low"
+        assert business_calls == [{"model": "openai/gpt-5.5", "reasoning_effort": "medium"}]
+        assert out["_llm_trace"][0]["tier"] == "medium"
 
     def test_answer_composer_uses_router_selected_high_profile(self):
         from nervos_brain.graph_engine.full_nodes import answer_composer

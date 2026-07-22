@@ -23,68 +23,15 @@ from nervos_brain.response_normalizer.platform_formatter import format_response_
 
 from . import prompts
 from .llm import call_llm, call_llm_json, get_last_call_meta
+from .product_policy import policy_from_state
 from .provider_registry import ProviderCapabilityRegistry
 from .source_registry import (
     format_source_registry_for_prompt,
     normalize_tool_filters,
     should_retry_qdrant_without_filters,
 )
-
-_ANSWER_COMPOSER_FALLBACK_TEXT = "证据已收集，但回答生成暂时失败，请稍后重试。"
-_DIRECT_ANSWER_FALLBACK_TEXT = "我可以直接回答低风险问题，但这次生成暂时失败了，请稍后重试。"
-_FINANCIAL_GUIDANCE_REFUSAL_TEXT = (
-    "I can't provide price predictions, target prices, or buy/sell guidance. "
-    "I can help explain fundamentals, tokenomics, technical risks, or where to find neutral market data."
-)
-_RETRIEVAL_POLICIES = {"none", "single", "deep"}
-_MARKET_PREDICTION_INTENT_RE = re.compile(
-    r"(?i)("
-    r"price\s*(?:prediction|forecast|target)|"
-    r"(?:predict|forecast).{0,40}(?:price|market|value)|"
-    r"(?:price|market|value).{0,40}(?:predict|forecast)|"
-    r"target\s*price|best\s*price|"
-    r"bull\s*cycle\s*target|bear\s*market\s*(?:bottom|target)|"
-    r"(?:moon|moonshot)\s*(?:price|target)|"
-    r"(?:price|target).{0,20}(?:moon|moonshot)|"
-    r"\b[A-Z]{2,12}\b\s+(?:to|reach|hit)\s*(?:\$|usd|usdt)\s*\d|"
-    r"(?:can|will|could)\s+\b[A-Z]{2,12}\b\s+(?:reach|hit)\s*(?:\$|usd|usdt)\s*\d|"
-    r"价格预测|预测价格|目标价|指导价|走势预测|牛市目标|熊市底|涨到多少|跌到多少|"
-    r"涨到\s*(?:\$|usd|usdt|美元)?\s*\d|跌到\s*(?:\$|usd|usdt|美元)?\s*\d|"
-    r"会涨到|会跌到"
-    r")"
-)
-_TRADING_DECISION_INTENT_RE = re.compile(
-    r"(?i)("
-    r"should\s+(?:i|we)\s+(?:buy|sell|hold)\b|"
-    r"is\s+(?:now|today)\s+(?:a\s+)?good\s+time\s+to\s+(?:buy|sell)|"
-    r"(?:buy|sell)\s+or\s+(?:buy|sell)|"
-    r"(?:now|today).{0,30}\b(?:buy|sell|hold|entry|exit)\b|"
-    r"\b(?:buy|sell|hold|entry|exit)\b.{0,30}(?:now|today)|"
-    r"take\s*profit|stop\s*loss|"
-    r"investment\s*advice|financial\s*advice|"
-    r"该不该(?:买|卖|持有)|要不要(?:买|卖|持有)|现在.{0,12}(?:买入|卖出|持有|建仓|加仓|减仓)|"
-    r"买入吗|卖出吗|持有吗|建仓吗|加仓吗|减仓吗|止盈|止损|投资建议|金融建议"
-    r")"
-)
-_MARKET_TIMING_CONTEXT_RE = re.compile(
-    r"(?i)(?:\bnow\b|\btoday\b|good\s+time|entry|exit|portfolio|investment|financial|现在|今天|入场|出场|仓位|投资|金融)"
-)
-_PRICE_RANGE_RE = re.compile(
-    r"(?i)(?:\$|usd|usdt|美元)\s*\d+(?:\.\d+)?\s*(?:[-–—~至到]\s*(?:\$|usd|usdt|美元)?\s*\d+(?:\.\d+)?)?"
-)
-_TECHNICAL_CKB_CONTEXT_RE = re.compile(
-    r"(?i)("
-    r"\bcell\b|\bcapacity\b|\bckbyte\b|common\s+knowledge\s+(?:base|byte)|"
-    r"ckb[-\s]?vm|lock\s+script|type\s+script|\btransaction\b|\bfee\b|\bcycles?\b|"
-    r"dao\s+(?:deposit|withdraw)|\bxudt\b|\bspore\b|rgb\+\+|\bsdk\b|\bapi\b|\brpc\b|"
-    r"\bnode\b|\bminer\b|"
-    r"容量|存储|交易|手续费|脚本|节点|矿工|质押|存入|提取"
-    r")"
-)
-
-
 def _normalize_info_needs_schema(info_needs: Any) -> list[dict]:
-    """Normalize the LLM schema without changing its semantic decision."""
+    """Normalize an already interpreted info-need list without inference."""
     if not isinstance(info_needs, list):
         return []
 
@@ -96,38 +43,19 @@ def _normalize_info_needs_schema(info_needs: Any) -> list[dict]:
         need.setdefault("kind", "concept_gap")
         need.setdefault("question", "")
         need["required"] = bool(need.get("required", False))
+        need.setdefault("availability", "public")
+        need.setdefault("purpose", str(need.get("question", "") or "Support the current deliverable."))
         sanitized.append(need)
     return sanitized
 
 
-def _is_financial_guidance_request(text: str) -> bool:
-    """Detect explicit price-prediction or trading-decision requests."""
-    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    if not normalized:
-        return False
-    if _MARKET_PREDICTION_INTENT_RE.search(normalized):
-        return True
-    if not _TRADING_DECISION_INTENT_RE.search(normalized):
-        return False
-    if _TECHNICAL_CKB_CONTEXT_RE.search(normalized) and not _MARKET_TIMING_CONTEXT_RE.search(normalized):
-        return False
-    if _TRADING_DECISION_INTENT_RE.search(normalized):
-        return True
-    return False
-
-
-def _financial_guidance_refusal_text(locale: str | None = None) -> str:
-    lang = str(locale or "").lower()
-    if lang.startswith("zh"):
-        return "我不能提供价格预测、目标价或买卖指导。可以帮你解释项目基本面、代币经济模型、技术风险，或告诉你去哪里查看中立市场数据。"
-    return _FINANCIAL_GUIDANCE_REFUSAL_TEXT
-
-
-def _force_financial_guidance_refusal(state: dict, *, question: str | None = None) -> dict[str, Any]:
+def _force_policy_response(state: dict, *, question: str | None = None) -> dict[str, Any]:
+    policy = policy_from_state(state)
     request_id = str(state.get("request_id", "unknown"))
+    locale = str(state.get("response_locale") or state.get("locale") or policy.language.default_locale)
     response = {
         "request_id": request_id,
-        "text": _financial_guidance_refusal_text(str(state.get("locale", "zh-CN"))),
+        "text": policy.message("policy_refusal", locale),
         "citations": [],
         "answer_mode": "policy_refusal",
     }
@@ -143,19 +71,15 @@ def _force_financial_guidance_refusal(state: dict, *, question: str | None = Non
     }
 
 
-def _sanitize_financial_guidance_response(state: dict, response: dict[str, Any]) -> bool:
-    """Replace any generated price/trading guidance with a refusal."""
-    question = _effective_question(state)
-    text = str(response.get("text", "") or "")
-    if not _is_financial_guidance_request(question):
+def _enforce_policy_response(state: dict, response: dict[str, Any]) -> bool:
+    """Apply an already classified policy action without text classification."""
+    contract = state.get("turn_contract", {})
+    policy_action = contract.get("policy", {}).get("action") if isinstance(contract, dict) else None
+    if policy_action != "refuse":
         return False
-    if not (
-        _PRICE_RANGE_RE.search(text)
-        or _MARKET_PREDICTION_INTENT_RE.search(text)
-        or _TRADING_DECISION_INTENT_RE.search(text)
-    ):
-        return False
-    response["text"] = _financial_guidance_refusal_text(str(state.get("locale", "zh-CN")))
+    product_policy = policy_from_state(state)
+    locale = str(state.get("response_locale") or state.get("locale") or product_policy.language.default_locale)
+    response["text"] = product_policy.message("policy_refusal", locale)
     response["citations"] = []
     response["answer_mode"] = "policy_refusal"
     return True
@@ -165,15 +89,16 @@ logger = logging.getLogger(__name__)
 
 _MODEL_TIERS = {"low", "medium", "high"}
 _NODE_FALLBACK_TIERS = {
-    "info_gap_assessor": "low",
+    "turn_interpreter": "low",
     "retriever_planner": "low",
     "reflection_pre": "low",
     "reflection_post": "medium",
     "direct_answer": "low",
     "answer_composer": "medium",
+    "response_compliance": "medium",
 }
 _LLM_ROUTER_SYSTEM = """Prompt ID: model_router
-You are the Nervos Brain model-tier router.
+You are the model-tier router.
 Your only task is to select one of low, medium, or high for the current graph
 node. Judge only task complexity, risk, and the node goal. Do not change graph
 routing, retrieval policy, or answer content.
@@ -192,7 +117,7 @@ Selection constraints:
 - Do not underspend or overspend model capacity. Judge only what this node
   must decide; do not upgrade based on a domain name, entity name, or request
   for detail.
-- info_gap_assessor and retriever_planner default to low. Upgrade only when
+- turn_interpreter and retriever_planner default to low. Upgrade only when
   the task structure has conflict, complex dependencies, or high risk.
 - reflection_pre defaults to low. Do not use a higher tier for more background
   when existing evidence already completes the core deliverable.
@@ -222,35 +147,6 @@ def _budget_int(state: dict, key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _budget_float(state: dict, key: str, default: float) -> float:
-    budget = state.get("budget", {})
-    if not isinstance(budget, dict):
-        return default
-    value = budget.get(key, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _normalized_decision(raw: Any) -> str:
-    decision = str(raw or "").strip()
-    if decision in {"ask_user", "has_needs", "answer_direct"}:
-        return decision
-    return "has_needs"
-
-
-def _normalize_retrieval_policy(raw: Any, *, decision: str) -> str:
-    if decision in {"answer_direct", "ask_user"}:
-        return "none"
-    policy = str(raw or "").strip()
-    if policy == "none":
-        return "single"
-    if policy in _RETRIEVAL_POLICIES:
-        return policy
-    return "single"
 
 
 def _merge_policy_budget(state: dict, retrieval_policy: str) -> dict[str, Any]:
@@ -798,16 +694,18 @@ def _get_profile(
 
 
 def _router_context_flags(state: dict, *, node_name: str) -> dict[str, Any]:
-    question = _effective_question(state)
     response = state.get("_final_response", {})
     draft = response.get("text", "") if isinstance(response, dict) else ""
     evidence = state.get("evidence", [])
     conflicts = state.get("conflicts", [])
     info_needs = state.get("info_needs", [])
+    contract = state.get("turn_contract", {})
+    if not isinstance(contract, dict):
+        contract = {}
     return {
-        "has_code_request": bool(re.search(r"代码|code|typescript|javascript|python|rust|示例|example", question, re.I)),
-        "has_error_or_logs": bool(re.search(r"报错|错误|error|exception|traceback|日志|log", question, re.I)),
-        "has_architecture_request": bool(re.search(r"架构|方案|设计|完整|构建|开发", question, re.I)),
+        "turn_route": str(contract.get("route", "")),
+        "turn_relation": str(contract.get("turn_relation", "")),
+        "policy_action": str((contract.get("policy") or {}).get("action", "")),
         "needs_citation_check": node_name.startswith("reflection") and bool(evidence),
         "evidence_count": len(evidence) if isinstance(evidence, list) else 0,
         "conflict_count": len(conflicts) if isinstance(conflicts, list) else 0,
@@ -908,12 +806,13 @@ def _router_llm_row(
 
 def _node_goal(node_name: str) -> str:
     return {
-        "info_gap_assessor": "Decide whether to answer directly, retrieve, or ask the user, and choose a retrieval policy.",
+        "turn_interpreter": "Interpret the current turn and create the semantic contract for routing.",
         "retriever_planner": "Convert information needs into the smallest necessary retrieval plan.",
         "reflection_pre": "Decide whether current evidence is sufficient for the core question.",
         "reflection_post": "Check whether the draft is correct, citations match, and rewriting is needed.",
         "direct_answer": "Answer a low-risk question directly without citations.",
         "answer_composer": "Generate the final answer from evidence and context.",
+        "response_compliance": "Check language, identity, scope, evidence, and policy compliance.",
     }.get(node_name, "Execute the current full graph node task.")
 
 
@@ -932,7 +831,7 @@ def _thread_key_from_context(context: dict[str, str]) -> dict[str, str] | None:
 
 def _load_recent_messages(state: dict) -> list[dict[str, Any]]:
     raw = state.get("recent_messages", [])
-    if isinstance(raw, list):
+    if isinstance(raw, list) and raw:
         return [row for row in raw if isinstance(row, dict)]
 
     svc = state.get("_memory_service")
@@ -977,62 +876,24 @@ def _format_conversation_context(messages: list[dict[str, Any]], *, limit_chars:
     return text
 
 
-def _looks_like_self_contained_question(question: str) -> bool:
-    """Best-effort context gate; semantic decisions still belong to the LLM."""
-    text = re.sub(r"\s+", " ", str(question or "")).strip()
-    if len(text) < 12:
-        return False
-    if not any(marker in text for marker in ("?", "？", "什么", "哪些", "哪个", "如何", "怎么", "为什么", "是否", "吗")):
-        return False
-    followup_markers = (
-        "这个",
-        "这个呢",
-        "这些",
-        "它",
-        "他们",
-        "上面",
-        "刚才",
-        "继续",
-        "再说",
-        "小白版",
-        "展开",
-        "那",
-        "所以",
-    )
-    if any(text == marker or text.startswith(marker) for marker in followup_markers):
-        return False
-    context_dependent_patterns = (
-        "有没有",
-        "有链接",
-        "哪里看",
-        "怎么学",
-        "靠谱吗",
-        "资料",
-        "来源",
-        "引用",
-    )
-    if any(pattern in text for pattern in context_dependent_patterns) and not re.search(
-        r"[A-Za-z0-9][A-Za-z0-9_.:/#-]{2,}",
-        text,
-    ):
-        return False
-    return True
-
-
 def _conversation_context_from_state(state: dict) -> str:
-    existing = str(state.get("conversation_context", "") or "").strip()
-    question = _question_from_user_message(state)
-    if existing and existing.startswith("Current message replies"):
-        return existing
-    if _looks_like_self_contained_question(question):
-        return (
-            "Context gate: the current user question appears self-contained. "
-            "Ordinary recent history may resolve pronouns or omissions only; it "
-            "must not change the retrieval target, answer topic, or evidence organization."
+    selected = state.get("selected_context", [])
+    if isinstance(selected, list) and selected:
+        return _format_conversation_context(
+            [item for item in selected if isinstance(item, dict)],
+            limit_chars=_policy_context_limit(state),
         )
-    if existing:
-        return existing
-    return _format_conversation_context(_load_recent_messages(state))
+    # A context string is trusted only after the interpreter has written a
+    # contract. This prevents legacy gateways from injecting ordinary history.
+    if isinstance(state.get("turn_contract"), dict):
+        existing = str(state.get("conversation_context", "") or "").strip()
+        if existing:
+            return existing
+    return "(none)"
+
+
+def _policy_context_limit(state: dict) -> int:
+    return policy_from_state(state).context.max_context_chars
 
 
 def _load_memory_facts(state: dict) -> list[dict]:
@@ -1124,125 +985,6 @@ def _effective_question(state: dict) -> str:
     return _question_from_user_message(state).strip()
 
 
-def _merge_checkpoint_question(question: str, checkpoint: dict[str, object] | None) -> str:
-    text = str(question or "").strip()
-    if checkpoint is None:
-        return text
-    payload = checkpoint.get("context_payload", {})
-    if not isinstance(payload, dict):
-        return text
-    origin = str(payload.get("origin_question", "") or "").strip()
-    if not origin:
-        return text
-    if not text:
-        return origin
-    if origin in text or text in origin:
-        return text if len(text) >= len(origin) else origin
-    return f"{origin}\nUser supplement: {text}"
-
-
-def _looks_like_new_user_intent(text: str) -> bool:
-    normalized = re.sub(r"\s+", "", text.lower())
-    if not normalized:
-        return False
-    markers = (
-        "是什么",
-        "什么是",
-        "为什么",
-        "怎么",
-        "如何",
-        "能不能",
-        "可以",
-        "给我",
-        "写一个",
-        "完整",
-        "例子",
-        "应用",
-        "开发什么",
-        "代码",
-        "?",
-        "？",
-    )
-    return any(marker in normalized for marker in markers)
-
-
-def _looks_like_checkpoint_answer(text: str, checkpoint: dict[str, object]) -> bool:
-    normalized = re.sub(r"\s+", "", text.lower())
-    if not normalized:
-        return False
-
-    param_markers = (
-        "ts",
-        "typescript",
-        "js",
-        "javascript",
-        "rust",
-        "go",
-        "python",
-        "ckb-cli",
-        "cli",
-        "sdk",
-        "ccc",
-        "node",
-        "browser",
-        "testnet",
-        "mainnet",
-        "v0.",
-        "0.",
-        "版本",
-        "环境",
-        "调用脚本",
-        "合约",
-        "脚本",
-    )
-    if any(marker in normalized for marker in param_markers):
-        return True
-
-    payload = checkpoint.get("context_payload", {})
-    ask_question = ""
-    if isinstance(payload, dict):
-        ask_question = str(payload.get("ask_user_question", "") or "").lower()
-    missing = checkpoint.get("missing_params", [])
-    missing_text = " ".join(str(item).lower() for item in missing) if isinstance(missing, list) else ""
-    if any(marker in ask_question or marker in missing_text for marker in ("sdk", "语言", "版本", "environment", "env")):
-        return len(normalized) <= 40 and not _looks_like_new_user_intent(text)
-
-    return len(normalized) <= 24 and not _looks_like_new_user_intent(text)
-
-
-def _should_resume_checkpoint(question: str, checkpoint: dict[str, object] | None) -> bool:
-    if checkpoint is None:
-        return False
-    text = str(question or "").strip()
-    if not text:
-        return False
-    if _looks_like_checkpoint_answer(text, checkpoint):
-        return True
-    if _looks_like_new_user_intent(text):
-        return False
-    return len(re.sub(r"\s+", "", text)) <= 24
-
-
-def _resume_info_needs(info_needs: list[dict]) -> list[dict]:
-    """Checkpoint 恢复后把用户本轮消息视为补参，避免继续卡在旧 required 缺参。"""
-    kept: list[dict] = []
-    for need in info_needs:
-        if not isinstance(need, dict):
-            continue
-        if bool(need.get("required", False)):
-            continue
-        kept.append(need)
-    if kept:
-        return kept
-    return [
-        {
-            "kind": "concept_gap",
-            "question": "The user supplied the missing parameters; continue retrieval and answer composition.",
-            "required": False,
-        }
-    ]
-
-
 def _memory_facts_to_evidence(facts: list[dict], namespace: str) -> list[dict]:
     evidence: list[dict] = []
     for fact in facts:
@@ -1274,6 +1016,8 @@ def _collect_missing_params(info_needs: list[dict]) -> list[str]:
         if not isinstance(need, dict):
             continue
         if not bool(need.get("required", False)):
+            continue
+        if str(need.get("availability", "public")) != "user_owned":
             continue
 
         hints = need.get("hints", {})
@@ -1353,149 +1097,240 @@ def _normalize_ask_user_question(raw: str) -> str:
 
     # Keep text concise and avoid overlong noisy prompts.
     if len(text) > 220:
-        text = text[:220].rstrip() + "…"
-
-    question_markers = ("？", "?", "吗", "呢", "是否", "可否", "能否")
-    if any(marker in text for marker in question_markers):
-        return text
-
+        text = text[:220].rstrip() + "..."
     return text
 
 
 # ---------------------------------------------------------------------------
-# M7-T1: InfoGapAssessor — 信息缺口评估
+# TurnInterpreter — current-turn semantic contract
 # ---------------------------------------------------------------------------
 
-def info_gap_assessor(state: dict) -> dict:
-    """调 LLM 分析问题，判断 ask_user / has_needs / answer_direct。"""
-    raw_question = _question_from_user_message(state)
-    facts = _load_memory_facts(state)
-    evidence = state.get("evidence", [])
-    checkpoint = _resume_thread_checkpoint(state)
-    should_resume_checkpoint = _should_resume_checkpoint(raw_question, checkpoint)
-    if checkpoint is not None and not should_resume_checkpoint:
-        _complete_thread_checkpoint(state)
-        checkpoint = None
-    question = _merge_checkpoint_question(raw_question, checkpoint)
-    recent_messages = _load_recent_messages(state)
-    conversation_context = _conversation_context_from_state(state)
+def _direct_reply_from_state(state: dict) -> dict[str, str]:
+    message = state.get("user_message", {})
+    if not isinstance(message, dict):
+        return {}
+    content = str(message.get("reply_to_content", "") or "").strip()
+    message_id = str(message.get("reply_to_message_id", "") or "").strip()
+    if not content or not message_id:
+        return {}
+    return {
+        "message_id": message_id,
+        "role": str(message.get("reply_to_role", "message") or "message"),
+        "content": content,
+    }
 
-    if _is_financial_guidance_request(question):
-        update = _force_financial_guidance_refusal(state, question=question)
-        update["memory_facts"] = facts
-        update["recent_messages"] = recent_messages
-        update["conversation_context"] = conversation_context
-        logger.info("info_gap_assessor blocked financial guidance request")
-        return update
 
-    user_prompt = prompts.INFO_GAP_USER.format(
-        question=question,
-        locale=str(state.get("locale", "zh-CN")),
-        conversation_context=conversation_context,
-        memory_facts=json.dumps(facts, ensure_ascii=False, default=str)[:500],
-        evidence_count=len(evidence),
-        time_budget=_time_budget_prompt(state),
-    )
-
-    if checkpoint:
-        thread_state: dict[str, Any] = {
+def _checkpoint_for_prompt(checkpoint: dict[str, object] | None) -> str:
+    if not checkpoint:
+        return "(none)"
+    payload = checkpoint.get("context_payload", {})
+    payload = payload if isinstance(payload, dict) else {}
+    return json.dumps(
+        {
             "missing_params": checkpoint.get("missing_params", []),
             "resume_node": checkpoint.get("resume_node", ""),
-        }
-        context_payload = checkpoint.get("context_payload", {})
-        if isinstance(context_payload, dict) and context_payload:
-            thread_state["context_payload"] = context_payload
-        user_prompt += (
-            "\nThread resume state: "
-            + json.dumps(thread_state, ensure_ascii=False)
-        )
+            "origin_question": payload.get("origin_question", ""),
+            "ask_user_question": payload.get("ask_user_question", ""),
+        },
+        ensure_ascii=False,
+        default=str,
+    )
 
-    profile = _select_model_profile(
+
+def _turn_interpreter_prompt(
+    state: dict,
+    *,
+    question: str,
+    facts: list[dict],
+    checkpoint: dict[str, object] | None,
+    direct_reply: dict[str, str],
+    recent_history: list[dict[str, Any]] | None = None,
+) -> str:
+    message = state.get("user_message", {})
+    platform_hint = message.get("platform_locale_hint", "") if isinstance(message, dict) else ""
+    prompt = prompts.TURN_INTERPRETER_USER.format(
+        question=question,
+        product_policy=policy_from_state(state).render_prompt_block(),
+        platform_locale_hint=str(platform_hint or "(none)"),
+        direct_reply=json.dumps(direct_reply, ensure_ascii=False, default=str) if direct_reply else "(none)",
+        checkpoint=_checkpoint_for_prompt(checkpoint),
+        memory_facts=json.dumps(facts[:8], ensure_ascii=False, default=str)[:1200] or "(none)",
+        evidence_count=len(state.get("evidence", [])) if isinstance(state.get("evidence", []), list) else 0,
+        time_budget=_time_budget_prompt(state),
+    )
+    if recent_history:
+        prompt += "\nQuoted recent history selected for this second interpretation pass:\n"
+        prompt += _format_conversation_context(
+            recent_history,
+            limit_chars=policy_from_state(state).context.max_context_chars,
+        )
+    return prompt
+
+
+def _run_turn_interpreter(
+    state: dict,
+    user_prompt: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any], int]:
+    policy = policy_from_state(state)
+    tiers = [policy.model_profiles.turn_interpreter, policy.model_profiles.turn_interpreter_fallback]
+    seen: set[str] = set()
+    trace: dict[str, Any] = {}
+    for index, tier in enumerate(tiers):
+        tier = str(tier or "low")
+        if tier in seen:
+            continue
+        seen.add(tier)
+        profile = _get_profile(state, tier, task_type="planning", require_json=True)
+        try:
+            result = _call_llm_json_with_profile(
+                prompts.TURN_INTERPRETER_SYSTEM,
+                user_prompt,
+                profile,
+            )
+            trace = _llm_update_for_call(
+                state,
+                node_name="turn_interpreter",
+                call_kind="business_json",
+                profile=profile,
+            )
+            if isinstance(result, dict):
+                return result, trace, index + 1
+        except Exception as exc:
+            logger.warning(
+                "turn_interpreter failed tier=%s attempt=%d type=%s",
+                tier,
+                index + 1,
+                type(exc).__name__,
+            )
+    return None, trace, len(seen)
+
+
+def turn_interpreter(state: dict) -> dict:
+    """Interpret the current turn once, then load history only when requested."""
+    policy = policy_from_state(state)
+    raw_question = _question_from_user_message(state)
+    facts = _load_memory_facts(state)
+    checkpoint = _resume_thread_checkpoint(state)
+    direct_reply = _direct_reply_from_state(state)
+    first_prompt = _turn_interpreter_prompt(
         state,
-        "planning",
-        node_name="info_gap_assessor",
-        require_json=True,
+        question=raw_question,
+        facts=facts,
+        checkpoint=checkpoint,
+        direct_reply=direct_reply,
     )
-    try:
-        result = _call_llm_json_with_profile(
-            prompts.INFO_GAP_SYSTEM,
-            user_prompt,
-            profile,
-        )
-        llm_trace_update = _llm_update_for_call(
-            state,
-            node_name="info_gap_assessor",
-            call_kind="business_json",
-            profile=profile,
-        )
-    except Exception:
-        result = {
-            "decision": "has_needs" if question.strip() else "ask_user",
-            "info_needs": [],
+    result, llm_trace_update, passes = _run_turn_interpreter(state, first_prompt)
+    if result is None:
+        locale = policy.language.default_locale
+        return {
+            "_turn_interpreter_error": True,
+            "_terminal_interpretation_error": True,
+            "turn_interpretation_passes": passes,
+            "contract_repair_count": int(state.get("contract_repair_count", 0) or 0),
+            "memory_facts": facts,
+            "response_locale": locale,
+            "locale": locale,
+            "_final_response": {
+                "request_id": str(state.get("request_id", "unknown")),
+                "text": policy.message("generation_failed", locale),
+                "citations": [],
+            },
+            **llm_trace_update,
         }
-        llm_trace_update = {}
 
-    decision = _normalized_decision(result.get("decision", "has_needs"))
-    info_needs = _normalize_info_needs_schema(result.get("info_needs", []))
-    if decision == "ask_user" and not _required_questions(info_needs):
-        decision = "has_needs" if info_needs else "answer_direct"
-    retrieval_policy = _normalize_retrieval_policy(
-        result.get("retrieval_policy"),
-        decision=decision,
+    from .turn_contract import derive_legacy_state, normalize_turn_contract
+
+    contract = normalize_turn_contract(
+        result,
+        policy,
+        current_message=raw_question,
+        confirmed_preference=state.get("confirmed_locale_preference"),
+        available_context_ids={direct_reply["message_id"]} if direct_reply else set(),
     )
-    existing_conflicts = state.get("conflicts", [])
-    if (
-        decision == "has_needs"
-        and isinstance(existing_conflicts, list)
-        and existing_conflicts
-    ):
-        retrieval_policy = "deep"
+    recent_messages: list[dict[str, Any]] = []
+    if contract["context"]["requirement"] == "recent_history":
+        recent_messages = _load_recent_messages(state)
+        available_ids = {
+            str(item.get("id") or item.get("message_id"))
+            for item in recent_messages
+            if isinstance(item, dict) and (item.get("id") or item.get("message_id"))
+        }
+        if direct_reply:
+            available_ids.add(direct_reply["message_id"])
+        second_prompt = _turn_interpreter_prompt(
+            state,
+            question=raw_question,
+            facts=facts,
+            checkpoint=checkpoint,
+            direct_reply=direct_reply,
+            recent_history=recent_messages,
+        )
+        second_result, second_trace, second_passes = _run_turn_interpreter(state, second_prompt)
+        passes += second_passes
+        if second_result is not None:
+            from .turn_contract import merge_contextual_contract
 
-    # 显式兼容旧调用：只有调用方主动传 force_retrieval=True 时才强制检索。
-    force_retrieval = bool(state.get("force_retrieval", False))
-    if force_retrieval and decision == "answer_direct" and question.strip():
-        decision = "has_needs"
-        retrieval_policy = "single"
-        if not info_needs:
-            info_needs = [
-                {
-                    "kind": "concept_gap",
-                    "question": "Retrieve the relevant public material before answering.",
-                    "required": False,
-                }
-            ]
+            contract = merge_contextual_contract(
+                contract,
+                second_result,
+                policy,
+                current_message=raw_question,
+                confirmed_preference=state.get("confirmed_locale_preference"),
+                available_context_ids=available_ids,
+            )
+            llm_trace_update = {**llm_trace_update, **second_trace}
 
-    # 如果线程里有待恢复 checkpoint，默认把本轮消息当作补参继续推进。
-    if checkpoint is not None and should_resume_checkpoint and question.strip():
-        decision = "has_needs"
-        retrieval_policy = "single" if retrieval_policy == "none" else retrieval_policy
+    if contract["context"]["requirement"] == "direct_reply" and direct_reply:
+        selected_ids = set(contract["context"]["selected_message_ids"])
+        selected_context = [direct_reply] if not selected_ids or direct_reply["message_id"] in selected_ids else []
+    elif contract["context"]["requirement"] == "recent_history":
+        selected_ids = set(contract["context"]["selected_message_ids"])
+        selected_context = ([direct_reply] if direct_reply and direct_reply["message_id"] in selected_ids else []) + [
+            item for item in recent_messages
+            if str(item.get("id") or item.get("message_id")) in selected_ids
+        ]
+    else:
+        selected_context = []
+
+    if checkpoint and contract["turn_relation"] == "clarification_answer":
         _complete_thread_checkpoint(state)
-        info_needs = _resume_info_needs(info_needs)
-        if info_needs:
-            info_needs[0].setdefault("hints", {})
-            if isinstance(info_needs[0]["hints"], dict):
-                info_needs[0]["hints"].setdefault(
-                    "resume_node",
-                    str(checkpoint.get("resume_node", "retriever_planner")),
-                )
+    elif checkpoint and contract["turn_relation"] == "new_task":
+        _complete_thread_checkpoint(state)
 
+    legacy = derive_legacy_state(
+        contract,
+        policy,
+        confirmed_preference=state.get("confirmed_locale_preference"),
+    )
+    if state.get("force_retrieval") and contract["route"] == "direct" and raw_question.strip():
+        legacy["_route_decision"] = "has_needs"
+        legacy["retrieval_policy"] = "single"
+        legacy["info_needs"] = [{
+            "kind": "concept_gap",
+            "question": raw_question,
+            "required": False,
+            "availability": "public",
+            "purpose": "Retrieve public material before answering the explicit retrieval request.",
+        }]
     update: dict[str, Any] = {
-        "_route_decision": decision,
-        "retrieval_policy": retrieval_policy,
-        "info_needs": info_needs,
+        **legacy,
         "memory_facts": facts,
         "recent_messages": recent_messages,
-        "conversation_context": conversation_context,
-        "resolved_question": question,
-        "budget": _merge_policy_budget(state, retrieval_policy),
+        "selected_context": selected_context,
+        "conversation_context": _format_conversation_context(selected_context, limit_chars=policy.context.max_context_chars),
+        "budget": _merge_policy_budget(state, legacy["retrieval_policy"]),
+        "turn_interpretation_passes": passes,
+        "contract_repair_count": int(state.get("contract_repair_count", 0) or 0),
         **llm_trace_update,
     }
+    if contract["policy"]["action"] == "refuse":
+        update.update(_force_policy_response({**state, **update}, question=contract["resolved_request"]))
     logger.debug(
-        "info_gap_assessor decision=%s retrieval_policy=%s info_needs=%d checkpoint=%s",
-        decision,
-        retrieval_policy,
-        len(info_needs),
-        bool(checkpoint),
+        "turn_interpreter route=%s retrieval_policy=%s info_needs=%d context=%s",
+        contract["route"],
+        contract["retrieval_policy"],
+        len(contract["info_needs"]),
+        contract["context"]["requirement"],
     )
     return update
 
@@ -1517,6 +1352,7 @@ def retriever_planner(state: dict) -> dict:
     facts = state.get("memory_facts", [])
 
     user_prompt = prompts.RETRIEVER_PLANNER_USER.format(
+        turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
         info_needs=json.dumps(info_needs, ensure_ascii=False, default=str),
         question=question,
         retrieval_policy=str(state.get("retrieval_policy", "single")),
@@ -1894,22 +1730,37 @@ def _summarize_citations(citations: list[dict]) -> str:
     ) or "(no citations)"
 
 
-def _has_reference_section(text: str) -> bool:
+def _has_reference_section(text: str, headings: list[str]) -> bool:
+    patterns = [re.escape(item.strip()) for item in headings if str(item).strip()]
+    if not patterns:
+        return False
     return bool(
         re.search(
-            r"(?im)^\s{0,3}(?:#{1,6}\s*)?(参考来源|引用来源|References|Sources)\b",
+            rf"(?im)^\s{{0,3}}(?:#{{1,6}}\s*)?(?:{'|'.join(patterns)})\b",
             text,
         )
     )
 
 
-def _append_reference_section(text: str, citations: list[dict[str, Any]], *, locale: str = "zh-CN") -> str:
-    if not citations or _has_reference_section(text):
+def _append_reference_section(
+    text: str,
+    citations: list[dict[str, Any]],
+    *,
+    locale: str | None = None,
+    policy: Any | None = None,
+) -> str:
+    active_policy = policy or policy_from_state({})
+    selected_locale = active_policy.resolve_locale(locale)
+    headings = [
+        str(messages.get("references_heading", ""))
+        for messages in active_policy.messages.values()
+        if isinstance(messages, dict)
+    ]
+    if not citations or _has_reference_section(text, headings):
         return text.strip()
 
-    is_english = str(locale or "").strip().lower().replace("_", "-").startswith("en")
-    heading = "References" if is_english else "参考来源"
-    fallback_title = "Source" if is_english else "来源"
+    heading = active_policy.message("references_heading", selected_locale, default="References")
+    fallback_title = active_policy.message("source_label", selected_locale, default="Source")
 
     rows: list[str] = []
     for idx, citation in enumerate(citations, start=1):
@@ -1996,6 +1847,8 @@ def _required_questions(info_needs: list[dict]) -> list[str]:
             continue
         if not bool(need.get("required", False)):
             continue
+        if str(need.get("availability", "public")) != "user_owned":
+            continue
         question = str(need.get("question", "")).strip()
         if question:
             questions.append(question)
@@ -2006,38 +1859,15 @@ def _reflection_has_user_required_clarification(
     info_needs: list[dict],
     hints: dict[str, Any],
 ) -> bool:
-    """Return true only when the ask_user action is backed by user-owned missing data."""
-    if _required_questions(info_needs):
-        return True
-    clarify_question = str(hints.get("clarify_question", "") or "").strip()
-    if not clarify_question:
-        return False
-    text = clarify_question.lower()
-    user_owned_markers = (
-        "你的",
-        "您",
-        "你使用",
-        "你用",
-        "请贴",
-        "请提供你",
-        "请补充你",
-        "报错",
-        "日志",
-        "代码",
-        "配置",
-        "目标语言",
-        "sdk 语言",
-        "私有",
-        "业务",
+    """Allow AskUser only for a typed user-owned required info need."""
+    _ = hints
+    return any(
+        isinstance(need, dict)
+        and bool(need.get("required", False))
+        and str(need.get("availability", "public")) == "user_owned"
+        and bool(str(need.get("question", "") or "").strip())
+        for need in info_needs
     )
-    if not any(marker in text for marker in user_owned_markers):
-        return False
-    missing_params = hints.get("missing_params", [])
-    if isinstance(missing_params, list):
-        return any(str(item).strip() for item in missing_params)
-    if isinstance(missing_params, str):
-        return bool(missing_params.strip())
-    return True
 
 
 def _pre_answer_budget_exhausted(state: dict, *, reflection_round: int) -> bool:
@@ -2063,7 +1893,15 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     conflicts = state.get("conflicts", [])
     question = _effective_question(state)
 
-    req_questions = _required_questions(info_needs if isinstance(info_needs, list) else [])
+    req_questions = [
+        question
+        for need in (info_needs if isinstance(info_needs, list) else [])
+        if isinstance(need, dict)
+        and bool(need.get("required", False))
+        and str(need.get("availability", "public")) == "user_owned"
+        for question in [str(need.get("question", "") or "").strip()]
+        if question
+    ]
     if req_questions:
         return {
             "decision": "ask_user",
@@ -2104,20 +1942,6 @@ def _heuristic_reflection_pre(state: dict) -> dict[str, Any]:
     }
 
 
-def _localized_conflict_question(state: dict) -> str:
-    locale = str(state.get("locale", "zh-CN") or "zh-CN").strip().lower()
-    if locale.startswith("en"):
-        return "Sources disagree. What specific version or scenario are you using?"
-    return "不同来源结论不一致，能否补充你使用的具体版本或场景？"
-
-
-def _localized_uncertainty_question(state: dict) -> str:
-    locale = str(state.get("locale", "zh-CN") or "zh-CN").strip().lower()
-    if locale.startswith("en"):
-        return "The current information is uncertain. Please provide the specific version, environment, or goal."
-    return "当前信息存在不确定性，请补充具体版本、环境或目标。"
-
-
 def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
     response = state.get("_final_response", {})
     if not isinstance(response, dict):
@@ -2156,20 +1980,15 @@ def _heuristic_reflection_post(state: dict) -> dict[str, Any]:
             "revise_instructions": "Regenerate the complete answer from the existing evidence and ensure citation labels are correct.",
         }
 
-    if text.strip() == _ANSWER_COMPOSER_FALLBACK_TEXT:
-        return {
-            "decision": "revise_answer",
-            "reasoning": "The answer-generation fallback text was detected; retry answer generation.",
-            "uncertainty_score": 0.90,
-            "revise_instructions": "Retry answer generation; if it fails again, give a brief failure explanation.",
-        }
-
     if conflicts:
         return {
             "decision": "ask_user",
             "reasoning": "The evidence conflict is unresolved, so the answer may not be reliable.",
             "uncertainty_score": 0.82,
-            "clarify_question": _localized_conflict_question(state),
+            "clarify_question": policy_from_state(state).message(
+                "clarify_conflict",
+                state.get("response_locale") or state.get("locale"),
+            ),
         }
 
     if not text.strip():
@@ -2264,7 +2083,8 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
 
     user_prompt = prompts.REFLECTION_USER.format(
         stage=stage,
-        locale=str(state.get("locale", "zh-CN")),
+        locale=str(state.get("response_locale") or state.get("locale") or policy_from_state(state).language.default_locale),
+        turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
         question=question,
         info_needs=json.dumps(info_needs, ensure_ascii=False, default=str),
         memory_facts=json.dumps(memory_facts, ensure_ascii=False, default=str)[:800],
@@ -2335,7 +2155,14 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
     # 防止 pre-answer 阶段过早追问：
     # ask_user 只允许用于用户私有/现场必填信息；公开资料缺口或版本冲突应继续检索，
     # 若预算已耗尽且已有证据，则基于现有证据回答并说明边界。
-    req_questions = _required_questions(info_needs)
+    req_questions = [
+        str(need.get("question", "") or "").strip()
+        for need in info_needs
+        if isinstance(need, dict)
+        and bool(need.get("required", False))
+        and str(need.get("availability", "public")) == "user_owned"
+        and str(need.get("question", "") or "").strip()
+    ]
     has_user_required_clarification = _reflection_has_user_required_clarification(info_needs, hints)
     pre_budget_exhausted = (
         stage == "pre_answer"
@@ -2368,35 +2195,13 @@ def _reflect(state: dict, *, stage: str) -> dict[str, Any]:
 
     # post-answer 若生成器已报错，不能 accept_answer。
     if stage == "post_answer" and (
-        isinstance(compose_error, dict) or draft_answer.strip() == _ANSWER_COMPOSER_FALLBACK_TEXT
+        isinstance(compose_error, dict)
     ):
         decision = "revise_answer"
         uncertainty = max(uncertainty, 0.90)
         if not reasoning:
             reasoning = "Answer generation failed and must be retried."
         hints.setdefault("revise_instructions", "Retry answer generation from the existing evidence.")
-
-    # 主动追问策略：高不确定度时，优先让用户补充上下文。
-    ask_threshold = _budget_float(state, "ask_user_uncertainty_threshold", 0.45)
-    if decision == "continue_retrieval" and uncertainty >= ask_threshold:
-        should_ask_user = True
-        if stage == "pre_answer":
-            # pre-answer 不因“高不确定度”单独触发追问；
-            # 只有用户私有/现场必填信息才追问；公开资料冲突继续检索或回答。
-            should_ask_user = has_user_required_clarification
-
-        if should_ask_user:
-            decision = "ask_user"
-            if not hints.get("clarify_question"):
-                hints["clarify_question"] = (
-                    req_questions[0]
-                    if req_questions
-                    else _localized_uncertainty_question(state)
-                )
-        elif stage == "pre_answer" and evidence and pre_budget_exhausted:
-            decision = "accept_answer"
-            hints.pop("clarify_question", None)
-            hints.pop("missing_params", None)
 
     if (
         stage == "pre_answer"
@@ -2449,6 +2254,89 @@ def reflection_post(state: dict) -> dict:
     return _reflect(state, stage="post_answer")
 
 
+def response_compliance(state: dict) -> dict:
+    """Review every answer path for locale, identity, scope, evidence and policy."""
+    response = state.get("_final_response", {})
+    if not isinstance(response, dict):
+        response = {}
+    policy = policy_from_state(state)
+    locale = str(state.get("response_locale") or state.get("locale") or policy.language.default_locale)
+    if _enforce_policy_response(state, response):
+        return {
+            "_final_response": response,
+            "_compliance_decision": "accept",
+            "compliance_replacement_count": int(state.get("compliance_replacement_count", 0) or 0),
+            "_self_check_pass": True,
+        }
+
+    evidence = state.get("evidence", [])
+    evidence = evidence if isinstance(evidence, list) else []
+    citations = response.get("citations", [])
+    citations = citations if isinstance(citations, list) else []
+    user_prompt = prompts.RESPONSE_COMPLIANCE_USER.format(
+        locale=locale,
+        product_policy=policy.render_prompt_block(),
+        turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
+        conversation_context=_conversation_context_from_state(state),
+        draft_answer=str(response.get("text", "") or "")[:5000] or "(empty)",
+        evidence_summary=_summarize_evidence(evidence),
+        citations_summary=_summarize_citations(citations),
+    )
+    raw_result: dict[str, Any] = {}
+    llm_trace_update: dict[str, Any] = {}
+    try:
+        profile = _select_model_profile(
+            state,
+            "reflection",
+            node_name="response_compliance",
+            require_json=True,
+            fallback_tier=policy.model_profiles.response_compliance,
+        )
+        raw_result = _call_llm_json_with_profile(
+            prompts.RESPONSE_COMPLIANCE_SYSTEM,
+            user_prompt,
+            profile,
+        )
+        llm_trace_update = _llm_update_for_call(
+            state,
+            node_name="response_compliance",
+            call_kind="business_json",
+            profile=profile,
+        )
+    except Exception as exc:
+        logger.warning("response_compliance failed type=%s", type(exc).__name__)
+
+    decision = str(raw_result.get("decision", "accept") if isinstance(raw_result, dict) else "accept").strip()
+    replacement = str(raw_result.get("replacement_answer", "") or "").strip() if isinstance(raw_result, dict) else ""
+    current_replacements = int(state.get("compliance_replacement_count", 0) or 0)
+    if decision == "replace" and replacement and current_replacements < policy.compliance.max_replacements:
+        response["text"] = replacement
+        current_replacements += 1
+        response["citations"] = list(citations)
+        update: dict[str, Any] = {
+            "_final_response": response,
+            "compliance_replacement_count": current_replacements,
+            "_compliance_decision": "replace",
+            "_compliance_issue_codes": list(raw_result.get("issue_codes", [])) if isinstance(raw_result, dict) else [],
+            "_self_check_pass": True,
+            **llm_trace_update,
+        }
+        if _has_inline_citation_tags(replacement):
+            compiled_text, compiled_citations = _compile_inline_citations(replacement, evidence)
+            response["text"] = compiled_text
+            response["citations"] = compiled_citations
+        return update
+
+    return {
+        "_final_response": response,
+        "compliance_replacement_count": current_replacements,
+        "_compliance_decision": "accept",
+        "_compliance_issue_codes": list(raw_result.get("issue_codes", [])) if isinstance(raw_result, dict) else [],
+        "_self_check_pass": bool(str(response.get("text", "") or "").strip()),
+        **llm_trace_update,
+    }
+
+
 def doc_grader(state: dict) -> dict:
     """兼容壳层：内部委托给 pre_answer 通用反思。"""
     return reflection_pre(state)
@@ -2470,9 +2358,10 @@ def answer_composer(state: dict) -> dict:
             }
 
     question = _effective_question(state)
+    product_policy = policy_from_state(state)
     max_evidence_chunks = _budget_int(state, "max_evidence_chunks", 8)
     evidence = list(state.get("evidence", []))[:max_evidence_chunks]
-    locale = state.get("locale", "zh-CN")
+    locale = str(state.get("response_locale") or state.get("locale") or product_policy.language.default_locale)
     request_id = state.get("request_id", "unknown")
     direct_mode = (
         str(state.get("retrieval_policy", "")).strip() == "none"
@@ -2483,8 +2372,10 @@ def answer_composer(state: dict) -> dict:
     if not evidence:
         if direct_mode:
             user_prompt = prompts.DIRECT_ANSWER_USER.format(
+                product_policy=product_policy.render_prompt_block(),
                 question=question,
                 locale=locale,
+                turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
                 conversation_context=_conversation_context_from_state(state),
                 time_budget=_time_budget_prompt(state),
             )
@@ -2511,7 +2402,7 @@ def answer_composer(state: dict) -> dict:
                     profile=profile,
                 )
             except Exception as exc:
-                answer_text = _DIRECT_ANSWER_FALLBACK_TEXT
+                answer_text = product_policy.message("direct_generation_failed", locale)
                 llm_trace_update = {}
                 compose_error = {
                     "type": exc.__class__.__name__,
@@ -2530,7 +2421,7 @@ def answer_composer(state: dict) -> dict:
                 "citations": [],
                 "answer_mode": "direct",
             }
-            refused_financial_guidance = _sanitize_financial_guidance_response(state, response)
+            refused_financial_guidance = _enforce_policy_response(state, response)
             if compose_error:
                 response["trace_summary"] = (
                     f"direct_answer_error={compose_error['type']}: {compose_error['message']}"
@@ -2555,7 +2446,7 @@ def answer_composer(state: dict) -> dict:
         return {
             "_final_response": {
                 "request_id": request_id,
-                "text": "当前知识库没有检索到足够证据，暂时不能给出可靠结论。请换一个更具体的关键词，或补充你想查的协议、工具、版本或报错信息。",
+                "text": product_policy.message("insufficient_evidence", locale),
                 "citations": [],
             },
             "_terminal_insufficient_evidence": True,
@@ -2574,8 +2465,10 @@ def answer_composer(state: dict) -> dict:
         )
 
     user_prompt = prompts.ANSWER_COMPOSER_USER.format(
+        product_policy=product_policy.render_prompt_block(),
         question=question,
         locale=locale,
+        turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
         conversation_context=_conversation_context_from_state(state),
         evidence_block=evidence_block or "(no usable evidence)",
         time_budget=_time_budget_prompt(state),
@@ -2609,7 +2502,7 @@ def answer_composer(state: dict) -> dict:
             profile=profile,
         )
     except Exception as exc:
-        answer_text = _ANSWER_COMPOSER_FALLBACK_TEXT
+        answer_text = product_policy.message("generation_failed", locale)
         llm_trace_update = {}
         compose_error = {
             "type": exc.__class__.__name__,
@@ -2627,7 +2520,7 @@ def answer_composer(state: dict) -> dict:
         "text": answer_text,
         "citations": [],
     }
-    refused_financial_guidance = _sanitize_financial_guidance_response(state, response)
+    refused_financial_guidance = _enforce_policy_response(state, response)
     if compose_error:
         response["trace_summary"] = (
             f"answer_composer_error={compose_error['type']}: {compose_error['message']}"
@@ -2672,7 +2565,7 @@ def format_repair(state: dict) -> dict:
 
     text = response.get("text", "")
     citations = response.get("citations", [])
-    if _sanitize_financial_guidance_response(state, response):
+    if _enforce_policy_response(state, response):
         text = response.get("text", "")
         citations = response.get("citations", [])
 
@@ -2684,7 +2577,12 @@ def format_repair(state: dict) -> dict:
         text, citations = _compile_inline_citations(text, evidence)
     else:
         text, citations = normalize_citations(text, citations)
-    text = _append_reference_section(text, citations, locale=str(state.get("locale", "zh-CN")))
+    text = _append_reference_section(
+        text,
+        citations,
+        locale=str(state.get("response_locale") or state.get("locale") or policy_from_state(state).language.default_locale),
+        policy=policy_from_state(state),
+    )
 
     response["text"] = text
     response["citations"] = citations
@@ -2739,7 +2637,7 @@ def format_repair(state: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def ask_user(state: dict) -> dict:
-    """当 InfoGapAssessor 判断需要反问时，生成反问回答。"""
+    """When the contract requires private user input, generate one question."""
     info_needs = _normalize_info_needs_schema(state.get("info_needs", []))
     request_id = state.get("request_id", "unknown")
     checkpoint_id: str | None = None
@@ -2753,7 +2651,7 @@ def ask_user(state: dict) -> dict:
 
     if not (isinstance(reflection_hints, dict) and str(reflection_hints.get("clarify_question", "")).strip()):
         for need in info_needs:
-            if need.get("required", False):
+            if need.get("required", False) and str(need.get("availability", "public")) == "user_owned":
                 question = need.get("question", question)
                 break
 
@@ -2769,10 +2667,13 @@ def ask_user(state: dict) -> dict:
     if not guard_reason:
         question = _normalize_ask_user_question(question)
     else:
-        locale = state.get("locale", "zh-CN")
+        product_policy = policy_from_state(state)
+        locale = str(state.get("response_locale") or state.get("locale") or product_policy.language.default_locale)
         user_prompt = prompts.DIRECT_ANSWER_USER.format(
+            product_policy=product_policy.render_prompt_block(),
             question=_effective_question(state),
             locale=locale,
+            turn_contract=json.dumps(state.get("turn_contract", {}), ensure_ascii=False, default=str),
             conversation_context=_conversation_context_from_state(state),
             time_budget=_time_budget_prompt(state),
         )

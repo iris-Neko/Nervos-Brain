@@ -13,15 +13,13 @@ import re
 from typing import Any
 
 from nervos_brain.core_protocols.message_protocols import MessageEnvelope, OutboundMessage
+from nervos_brain.graph_engine.product_policy import load_product_policy
 
 from .feedback import build_csat_callback_data
-from .language_detection import detect_message_locale
-
-
 def telegram_update_to_message_envelope(
     update: dict[str, Any],
     *,
-    default_locale: str = "zh-CN",
+    default_locale: str | None = None,
 ) -> MessageEnvelope:
     """Parse Telegram Bot API update into platform-neutral MessageEnvelope."""
     msg = (
@@ -95,11 +93,12 @@ def telegram_update_to_message_envelope(
         if command_args:
             message["command_args"] = command_args
 
+    # This is only a weak platform preference. Semantic output language is
+    # resolved by TurnInterpreter from the current request.
     locale = sender.get("language_code")
-    fallback_locale = locale.strip() if isinstance(locale, str) and locale.strip() else default_locale
-    message["locale_hint"] = detect_message_locale(
-        command_args if command_args is not None else text,
-        fallback_locale=fallback_locale,
+    policy_default = default_locale or load_product_policy().language.default_locale
+    message["platform_locale_hint"] = (
+        locale.strip() if isinstance(locale, str) and locale.strip() else policy_default
     )
 
     return message
@@ -113,7 +112,8 @@ def message_envelope_to_graph_state(
     """Build a minimal full-graph compatible state dict from MessageEnvelope."""
     context = dict(message.get("context", {}))
     now_req = request_id or f"tg-{int(time.time() * 1000)}"
-    locale = str(message.get("locale_hint", "zh-CN"))
+    policy = load_product_policy()
+    locale = policy.language.default_locale
 
     user_key = {
         "platform": "telegram",
@@ -137,6 +137,8 @@ def message_envelope_to_graph_state(
         },
         "route": "graph",
         "locale": locale,
+        "platform_locale_hint": str(message.get("platform_locale_hint", "") or ""),
+        "_product_policy": policy,
     }
 
     guild_id = context.get("guild_id")

@@ -31,7 +31,7 @@ def test_discord_message_to_envelope_basic_text():
     assert env["context"]["user_id"] == "u-1"
     assert env["context"]["channel_id"] == "c-1"
     assert env["context"]["guild_id"] == "g-1"
-    assert env["locale_hint"] == "en"
+    assert env["platform_locale_hint"] == "en-US"
 
 
 def test_discord_message_to_envelope_prefers_english_text_over_chinese_author_locale():
@@ -45,7 +45,7 @@ def test_discord_message_to_envelope_prefers_english_text_over_chinese_author_lo
     }
     env = discord_message_to_message_envelope(payload)
 
-    assert env["locale_hint"] == "en"
+    assert env["platform_locale_hint"] == "zh-CN"
 
 
 def test_discord_message_to_envelope_prefers_chinese_text_over_english_author_locale():
@@ -59,7 +59,7 @@ def test_discord_message_to_envelope_prefers_chinese_text_over_english_author_lo
     }
     env = discord_message_to_message_envelope(payload)
 
-    assert env["locale_hint"] == "zh-CN"
+    assert env["platform_locale_hint"] == "en-US"
 
 
 def test_discord_message_to_envelope_command_reply_and_attachments():
@@ -85,7 +85,7 @@ def test_discord_message_to_envelope_command_reply_and_attachments():
     assert env["command_args"] == "fiber open channel"
     assert env["reply_to_message_id"] == "m-previous"
     assert env["context"]["thread_id"] == "t-2"
-    assert env["locale_hint"] == "en"
+    assert env["platform_locale_hint"] == "en"
     kinds = {item["kind"] for item in env["attachments"]}
     assert kinds == {"image", "file", "link"}
 
@@ -103,12 +103,13 @@ def test_discord_message_envelope_to_graph_state_shape():
             "thread_id": "t-9",
         },
         "content": "what is ckb",
-        "locale_hint": "zh-CN",
+        "platform_locale_hint": "zh-CN",
     }
     state = discord_message_envelope_to_graph_state(env, request_id="dc-req-1")
     assert state["request_id"] == "dc-req-1"
     assert state["route"] == "graph"
-    assert state["locale"] == "zh-CN"
+    assert state["locale"] == "en"
+    assert state["platform_locale_hint"] == "zh-CN"
     assert state["user_memory_key"]["platform"] == "discord"
     assert state["channel_memory_key"] == {"platform": "discord", "guild_id": "g-9", "channel_id": "c-9"}
     assert state["thread_key"] == {

@@ -12,58 +12,39 @@ class RetrievalSource:
     label: str
     tool_hint: str
     description: str
-    topic_examples: tuple[str, ...] = ()
 
 
 SOURCES: dict[str, RetrievalSource] = {
     "github_docs": RetrievalSource(
         id="github_docs",
-        label="official docs and GitHub repository documents",
+        label="repository documentation and specifications",
         tool_hint="qdrant_search",
         description=(
-            "Official documentation, docs.nervos.org, RFCs, CKB/CCC/Fiber repository READMEs, "
-            "SDK documentation, tutorials, protocol specifications, and repository notes. "
-            "Prefer this source for official tutorials, onboarding paths, concept explanations, "
-            "specifications, and documentation links."
-        ),
-        topic_examples=(
-            "nervosnetwork/docs.nervos.org",
-            "nervosnetwork/ckb",
-            "nervosnetwork/rfcs",
-            "ckb-devrel/ccc",
-            "nervosnetwork/fiber",
-            "nervosnetwork/fiber-docs",
+            "Repository documentation, tutorials, protocol specifications, READMEs, standards, "
+            "and conceptual material. Prefer this source for authoritative onboarding paths, "
+            "concept explanations, specifications, and documentation links."
         ),
     ),
     "github_code": RetrievalSource(
         id="github_code",
-        label="GitHub source code, config files, and executable examples",
+        label="repository source code, configuration, and examples",
         tool_hint="github_search",
         description=(
-            "Nervos-related GitHub repository source code, configuration, scripts, functions, "
-            "types, modules, tests, SDK examples, and executable call patterns. Prefer this "
-            "source for source locations, function/class/command implementations, configuration "
-            "options, call chains, code related to an error, and concrete code snippets."
-        ),
-        topic_examples=(
-            "nervosnetwork/ckb",
-            "nervosnetwork/fiber",
-            "ckb-devrel/ccc",
-            "RGBPlusPlus/rgbpp",
-            "appfi5/appfi5",
+            "Repository source code, configuration, scripts, functions, types, modules, tests, "
+            "SDK examples, and executable call patterns. Prefer this source for source locations, "
+            "function or class implementations, configuration options, call chains, code related "
+            "to an error, and concrete code snippets."
         ),
     ),
     "nervos_talk": RetrievalSource(
         id="nervos_talk",
-        label="Nervos Talk forum posts and replies",
+        label="forum posts and replies",
         tool_hint="discourse_query",
         description=(
-            "Nervos Talk forum posts, replies, community discussions, Spark/grant/proposal "
-            "threads, ecosystem project introductions, real cases, project lists, community "
-            "opinions, and roadmap disputes. Prefer discourse_query for community availability, "
-            "project cases, discussion links, who is working on something, and related examples."
+            "Forum posts, replies, community discussions, proposals, project introductions, real "
+            "cases, community opinions, and roadmap discussions. Prefer this source for community "
+            "availability, project cases, discussion links, and related examples."
         ),
-        topic_examples=("nervos_talk:<topic_id>",),
     ),
 }
 
@@ -111,10 +92,9 @@ def format_source_registry_for_prompt() -> str:
         "official_docs, docs, or documentation:"
     ]
     for source in SOURCES.values():
-        topics = ", ".join(source.topic_examples) if source.topic_examples else "(none)"
         lines.append(
             f"- source={source.id}: {source.description} "
-            f"Recommended tool: {source.tool_hint}. Common topics: {topics}"
+            f"Recommended tool: {source.tool_hint}."
         )
     lines.append(
         "qdrant_search.filters supports: source, topic, type/doc_type, version, lang, url, "

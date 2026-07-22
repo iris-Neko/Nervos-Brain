@@ -16,10 +16,10 @@ from .full_nodes import (
     doc_grader,
     evidence_merger,
     format_repair,
-    info_gap_assessor,
+    response_compliance,
     retrieval_executor,
     retriever_planner,
-    self_check,
+    turn_interpreter,
 )
 
 
@@ -48,44 +48,9 @@ def _has_required_info_need(state: dict[str, Any]) -> bool:
     return any(
         isinstance(need, dict)
         and bool(need.get("required", False))
+        and str(need.get("availability", "public")) == "user_owned"
         for need in info_needs
     )
-
-
-def _has_user_clarification_hint(state: dict[str, Any]) -> bool:
-    hints = state.get("reflection_hints", {})
-    if not isinstance(hints, dict):
-        return False
-    clarify_question = str(hints.get("clarify_question", "") or "").strip()
-    if not clarify_question:
-        return False
-    text = clarify_question.lower()
-    user_owned_markers = (
-        "你的",
-        "您",
-        "你使用",
-        "报错",
-        "日志",
-        "代码",
-        "配置",
-        "运行环境",
-        "系统",
-        "版本号",
-        "目标语言",
-        "sdk 语言",
-        "钱包",
-        "地址",
-        "私有",
-        "业务",
-    )
-    if not any(marker in text for marker in user_owned_markers):
-        return False
-    missing_params = hints.get("missing_params", [])
-    if isinstance(missing_params, list):
-        return any(str(item).strip() for item in missing_params)
-    if isinstance(missing_params, str):
-        return bool(missing_params.strip())
-    return False
 
 
 def _has_evidence(state: dict[str, Any]) -> bool:
@@ -124,6 +89,7 @@ class FullGraphState(GraphState, total=False):
     _archive_store: Any
     _tool_transport: Any
     _mcp_transport: Any
+    _product_policy: Any
 
     # Optional runtime controls from gateway.
     render_mode: str
@@ -134,6 +100,9 @@ class FullGraphState(GraphState, total=False):
     _terminal_insufficient_evidence: bool
     _direct_answer: bool
     _financial_guidance_refusal: bool
+    _turn_interpreter_error: bool
+    _terminal_interpretation_error: bool
+    _compliance_decision: str
 
 
 @dataclass
@@ -169,7 +138,9 @@ def attach_runtime_to_state(
 # ---------------------------------------------------------------------------
 
 def route_after_assessment(state: FullGraphState) -> str:
-    """InfoGapAssessor 之后的路由。"""
+    """Route the normalized TurnContract to its next graph stage."""
+    if state.get("_turn_interpreter_error"):
+        return "format_repair"
     decision = state.get("_route_decision", "has_needs")
     if decision == "ask_user":
         return "ask_user" if _has_required_info_need(state) else "answer_composer"
@@ -192,7 +163,7 @@ def route_after_grading(state: FullGraphState) -> str:
     max_pre_rounds = _budget_int(state, "max_reflection_rounds_pre", 2)
 
     if decision == "ask_user":
-        if _has_required_info_need(state) or _has_user_clarification_hint(state):
+        if _has_required_info_need(state):
             return "ask_user"
         if _has_evidence(state):
             return "answer_composer"
@@ -212,13 +183,13 @@ def route_after_grading(state: FullGraphState) -> str:
 
 
 def route_after_answer_composer(state: FullGraphState) -> str:
-    """AnswerComposer 之后的路由。
+    """Every user-visible answer goes through the compliance reviewer."""
+    return "response_compliance"
 
-    直接回答和证据不足终止文案不需要再进入重反思循环。
-    """
-    if state.get("_direct_answer") or state.get("_terminal_insufficient_evidence"):
-        return "format_repair"
-    return "self_check"
+
+def route_after_compliance(state: FullGraphState) -> str:
+    """Compliance is a bounded final review; formatting is the terminal step."""
+    return "format_repair"
 
 
 def route_after_self_check(state: FullGraphState) -> str:
@@ -239,7 +210,7 @@ def route_after_self_check(state: FullGraphState) -> str:
     if decision == "accept_answer":
         return "format_repair"
     if decision == "ask_user":
-        if _has_required_info_need(state) or _has_user_clarification_hint(state):
+        if _has_required_info_need(state):
             return "ask_user"
         if _has_evidence(state):
             return "answer_composer"
@@ -287,30 +258,31 @@ def build_full_graph() -> Any:
     """构建并编译完整 LangGraph 工作流，返回编译后的 graph。"""
     graph = StateGraph(FullGraphState)
 
-    graph.add_node("info_gap_assessor", _timed_node("info_gap_assessor", info_gap_assessor))
+    graph.add_node("turn_interpreter", _timed_node("turn_interpreter", turn_interpreter))
     graph.add_node("ask_user", _timed_node("ask_user", ask_user))
     graph.add_node("retriever_planner", _timed_node("retriever_planner", retriever_planner_with_retry))
     graph.add_node("retrieval_executor", _timed_node("retrieval_executor", retrieval_executor))
     graph.add_node("evidence_merger", _timed_node("evidence_merger", evidence_merger))
     graph.add_node("doc_grader", _timed_node("doc_grader", doc_grader))
     graph.add_node("answer_composer", _timed_node("answer_composer", answer_composer))
-    graph.add_node("self_check", _timed_node("self_check", self_check))
+    graph.add_node("response_compliance", _timed_node("response_compliance", response_compliance))
     graph.add_node("format_repair", _timed_node("format_repair", format_repair))
 
-    graph.set_entry_point("info_gap_assessor")
+    graph.set_entry_point("turn_interpreter")
 
-    # InfoGapAssessor -> ask_user | retriever_planner | answer_composer
+    # TurnInterpreter -> ask_user | retriever_planner | answer_composer | format_repair
     graph.add_conditional_edges(
-        "info_gap_assessor",
+        "turn_interpreter",
         route_after_assessment,
         {
             "ask_user": "ask_user",
             "retriever_planner": "retriever_planner",
             "answer_composer": "answer_composer",
+            "format_repair": "format_repair",
         },
     )
 
-    graph.add_edge("ask_user", END)
+    graph.add_edge("ask_user", "response_compliance")
 
     # RetrieverPlanner -> RetrievalExecutor -> EvidenceMerger -> DocGrader
     graph.add_edge("retriever_planner", "retrieval_executor")
@@ -329,27 +301,19 @@ def build_full_graph() -> Any:
         },
     )
 
-    # AnswerComposer -> SelfCheck | FormatRepair
+    # AnswerComposer -> ResponseCompliance
     graph.add_conditional_edges(
         "answer_composer",
         route_after_answer_composer,
         {
-            "self_check": "self_check",
-            "format_repair": "format_repair",
+            "response_compliance": "response_compliance",
         },
     )
 
-    # SelfCheck(兼容壳层, 实际为 post-answer reflection)
-    # -> format_repair | retriever_planner | ask_user | answer_composer
     graph.add_conditional_edges(
-        "self_check",
-        route_after_self_check,
-        {
-            "format_repair": "format_repair",
-            "retriever_planner": "retriever_planner",
-            "ask_user": "ask_user",
-            "answer_composer": "answer_composer",
-        },
+        "response_compliance",
+        route_after_compliance,
+        {"format_repair": "format_repair"},
     )
 
     graph.add_edge("format_repair", END)

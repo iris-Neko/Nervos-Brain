@@ -18,7 +18,7 @@
 #   先把管道接好，再换真零件。
 #
 # 这个文件里有三个节点：
-#   1. info_gap_assessor  —— 判断"信息够不够"
+#   1. turn_interpreter  —— 根据已解析的缺口选择下一步
 #   2. ask_user           —— 反问用户补参数
 #   3. answer_composer    —— 组装最终回答
 # ============================================================
@@ -29,17 +29,17 @@ from nervos_brain.core_protocols import (
 )
 
 
-def info_gap_assessor(state: GraphState) -> dict:
+def turn_interpreter(state: GraphState) -> dict:
     """
-    M3-T3: 信息缺口评估节点（Mock 版本）
+    M3-T3: Turn Interpreter 的最小示例节点。
 
     这个节点的职责：
-      检查 GraphState 里的 info_needs 列表，
-      判断"当前信息够不够回答用户的问题"。
+      消费已经由上游解释得到的 info_needs 列表，
+      判断最小示例图下一步是否需要用户输入。
 
     判断逻辑（Mock 版本很简单）：
-      - 如果 info_needs 里有 required=True 的缺口 → 信息不够
-      - 如果 info_needs 为空 或者没有 required 的缺口 → 信息足够
+      - 如果 info_needs 里有 required=True 且 availability=user_owned 的缺口 → 需要用户输入
+      - 如果没有这类缺口 → 继续回答
 
     返回：
       一个字典，LangGraph 会把它合并到 GraphState 里。
@@ -55,16 +55,16 @@ def info_gap_assessor(state: GraphState) -> dict:
     # 检查是否有必须解决的信息缺口
     has_required_gap = any(
         need.get("required", False)
+        and need.get("availability", "public") == "user_owned"
         for need in info_needs
     )
 
     if has_required_gap:
         # 信息不够，需要反问用户
-        print("[InfoGapAssessor] 发现必须解决的信息缺口，需要反问用户")
+        print("[TurnInterpreter] required user-owned information is missing")
         return {"_route_decision": "ask_user"}
     else:
-        # 信息足够，可以直接回答
-        print("[InfoGapAssessor] 信息充足，可以组装回答")
+        print("[TurnInterpreter] no required user-owned information is missing")
         return {"_route_decision": "answer"}
 
 

@@ -66,6 +66,46 @@ llm_profiles:
     verbosity: "low"
     max_tokens: 4096
 
+# Product-level policy consumed by the Turn Interpreter and response checks.
+# Keep identity and user-visible fallback text here instead of in graph nodes.
+agent_policy:
+  identity:
+    name: "Nervos Brain"
+    aliases: ["NB"]
+    description: "An assistant for information, questions, and task completion."
+  language:
+    supported_locales: ["en", "zh-CN"]
+    default_locale: "en"
+    ambiguous_locale: "en"
+    use_confirmed_user_preference: true
+    unsupported_locale_behavior: "default_with_notice"
+  context:
+    recent_message_limit: 20
+    max_context_chars: 1800
+  model_profiles:
+    turn_interpreter: "low"
+    turn_interpreter_fallback: "medium"
+    response_compliance: "medium"
+  compliance:
+    max_replacements: 1
+
+# Optional overrides for user-visible fallback and policy messages.
+message_catalog:
+  en:
+    insufficient_evidence: "I could not find enough reliable evidence to answer this accurately yet."
+    generation_failed: "I could not prepare the answer this time. Please try again."
+    direct_generation_failed: "I could not prepare a direct answer this time. Please try again."
+    policy_refusal: "I cannot provide specific price predictions or buy/sell decisions. I can help with neutral facts, mechanisms, risks, or public data sources."
+    references_heading: "References"
+    source_label: "Source"
+  zh-CN:
+    insufficient_evidence: "当前没有检索到足够可靠的证据，暂时无法准确回答。"
+    generation_failed: "这次暂时没能生成回答，请稍后重试。"
+    direct_generation_failed: "这次暂时没能生成直接回答，请稍后重试。"
+    policy_refusal: "我不能提供具体价格预测或买卖决策，但可以解释中立事实、机制、风险或公开数据来源。"
+    references_heading: "参考来源"
+    source_label: "来源"
+
 logging:
   # 全局日志级别：DEBUG / INFO / WARNING / ERROR
   level: "INFO"
@@ -96,15 +136,19 @@ progress_updates:
   interval_s: 45
   max_updates: 3
   messages:
-    - "我还在查资料和整理证据，稍等一下。"
-    - "资料比较多，我正在核对来源和组织回答。"
-    - "还在生成最终回答，请再等一下。"
-  # 可选：按语言覆盖进度提示；不配置时英文问题会使用内置英文默认文案。
+    - "I am still checking sources and organizing the evidence. Please wait a moment."
+    - "There is quite a bit of material, so I am verifying the sources and shaping the answer."
+    - "I am still preparing the final answer. Please wait a little longer."
+  # Optional localized progress messages.
   messages_by_locale:
     en:
       - "I am still checking sources and organizing the evidence. Please wait a moment."
       - "There is quite a bit of material, so I am verifying the sources and shaping the answer."
       - "I am still preparing the final answer. Please wait a little longer."
+    zh-CN:
+      - "我还在查资料和整理证据，请稍等。"
+      - "我正在核对相关资料并组织回答。"
+      - "还在生成最终回答，请再等一下。"
 
 retrieval:
   # Qdrant server URL。为空时回退到本地 qdrant_path 嵌入模式。

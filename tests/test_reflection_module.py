@@ -473,9 +473,10 @@ def test_route_after_grading_still_asks_when_required_param_missing():
             "hop_count": 3,
             "info_needs": [
                 {
-                    "kind": "missing_param",
-                    "question": "请问你使用的是哪个 SDK？",
-                    "required": True,
+                        "kind": "missing_param",
+                        "question": "请问你使用的是哪个 SDK？",
+                        "required": True,
+                        "availability": "user_owned",
                 }
             ],
             "budget": {"max_hops": 3, "max_reflection_rounds_pre": 2},
@@ -532,7 +533,7 @@ def test_route_after_self_check_decision_mapping():
     assert route_after_self_check(
         {
             "reflection_decision": "ask_user",
-            "info_needs": [{"required": True, "question": "请贴完整报错日志"}],
+                "info_needs": [{"required": True, "availability": "user_owned", "question": "请贴完整报错日志"}],
         }
     ) == "ask_user"
     assert route_after_self_check({"reflection_decision": "accept_answer"}) == "format_repair"
@@ -542,7 +543,7 @@ def test_ask_user_normalizes_phrase_to_question():
     out = ask_user(
         {
             "request_id": "r-ask-1",
-            "info_needs": [{"required": True, "question": "CKB框架的基本概念和介绍"}],
+                "info_needs": [{"required": True, "availability": "user_owned", "question": "CKB框架的基本概念和介绍"}],
             "reflection_hints": {},
             "user_message": {"context": {"platform": "telegram", "user_id": "u-1"}},
         }

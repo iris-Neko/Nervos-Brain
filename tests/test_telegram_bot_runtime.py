@@ -42,6 +42,7 @@ def _sample_update(
     thread_id: int | None = None,
     user_id: int = 42,
     text: str = "hello",
+    language_code: str | None = None,
     is_bot: bool = False,
     chat_type: str = "supergroup",
     reply_to_bot: bool = False,
@@ -54,6 +55,8 @@ def _sample_update(
         "chat": {"id": chat_id, "type": chat_type},
         "from": {"id": user_id, "is_bot": is_bot},
     }
+    if language_code:
+        message["from"]["language_code"] = language_code
     if thread_id is not None:
         message["message_thread_id"] = thread_id
     if reply_to_bot:
@@ -271,7 +274,7 @@ def test_process_update_builds_fallback_outbound_dry_run():
     assert "force_retrieval" not in captured
 
 
-def test_process_update_attaches_same_user_recent_context_and_writes_memory():
+def test_process_update_does_not_preload_recent_context_and_writes_memory():
     fake_api = _FakeAPI()
     memory = _FakeMemory(
         recent=[
@@ -309,12 +312,9 @@ def test_process_update_attaches_same_user_recent_context_and_writes_memory():
     row = gateway.process_update(_sample_update(text="@NBCKB_Bot 你看看上文是什么"), dry_run=False)
 
     assert row["ignored"] is False
-    assert memory.read_calls[0]["platform"] == "telegram"
-    assert memory.read_calls[0]["user_id"] == "42"
-    assert memory.read_calls[0]["channel_id"] == "-100123"
-    assert memory.read_calls[0]["limit"] == 20
-    assert captured["recent_messages"] == memory.recent
-    assert "我刚才问的是 CKB 是什么" in captured["conversation_context"]
+    assert memory.read_calls == []
+    assert captured["recent_messages"] == []
+    assert captured["conversation_context"] == ""
     assert len(memory.write_calls) == 2
     assert memory.write_calls[0]["role"] == "user"
     assert memory.write_calls[0]["content"] == "你看看上文是什么"
@@ -638,8 +638,7 @@ def test_group_reply_to_bot_injects_replied_message_context():
     assert row["ignored"] is False
     assert captured["user_message"]["reply_to_message_id"] == "99"
     assert "CCC 相关" in captured["user_message"]["reply_to_content"]
-    assert "Current message replies to this assistant message" in captured["conversation_context"]
-    assert "CCC 相关" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
 
 
 def test_group_reply_to_bot_does_not_mix_unrelated_recent_context():
@@ -672,7 +671,8 @@ def test_group_reply_to_bot_does_not_mix_unrelated_recent_context():
     assert row["ignored"] is False
     assert memory.read_calls == []
     assert captured["recent_messages"] == []
-    assert "CKB 通常指 Nervos CKB" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
+    assert captured["user_message"]["reply_to_content"].startswith("CKB 通常指 Nervos CKB")
     assert "Fiber WASM" not in captured["conversation_context"]
 
 
@@ -706,8 +706,8 @@ def test_group_reply_to_bot_missing_snapshot_does_not_guess_from_recent_context(
     assert row["ignored"] is False
     assert memory.read_calls == []
     assert captured["recent_messages"] == []
-    assert "the platform did not provide the replied message content" in captured["conversation_context"]
-    assert "Do not guess it from ordinary history" in captured["conversation_context"]
+    assert captured["conversation_context"] == ""
+    assert "reply_to_content" not in captured["user_message"]
     assert "Fiber WASM" not in captured["conversation_context"]
 
 
@@ -779,7 +779,7 @@ def test_process_update_sends_visible_progress_for_slow_graph():
     assert fake_api.sent_requests[-1]["payload"]["text"] == "ok"
 
 
-def test_process_update_sends_chinese_visible_progress_for_chinese_question():
+def test_process_update_uses_default_english_visible_progress():
     fake_api = _FakeAPI()
 
     def runner(state: dict[str, Any]) -> dict[str, Any]:
@@ -803,7 +803,8 @@ def test_process_update_sends_chinese_visible_progress_for_chinese_question():
     assert row["ignored"] is False
     progress_requests = [
         item for item in fake_api.callback_requests
-        if item["method"] == "sendMessage" and item["payload"].get("text") == "还在处理"
+        if item["method"] == "sendMessage"
+        and "checking sources" in str(item["payload"].get("text", ""))
     ]
     assert len(progress_requests) == 1
 
@@ -838,6 +839,20 @@ def test_process_update_writes_debug_event(tmp_path: Path):
 
     def runner(state: dict[str, Any]) -> dict[str, Any]:
         return {
+            "turn_contract": {
+                "turn_relation": "new_task",
+                "core_deliverable": "actionable result",
+                "context": {"requirement": "none"},
+                "language": {
+                    "input_locales": ["en"],
+                    "communication_locale": "en",
+                    "requested_output_locale": "",
+                    "locale_source": "current_message",
+                },
+                "route": "retrieve",
+            },
+            "response_locale": "en",
+            "_compliance_decision": "accept",
             "_route_decision": "has_needs",
             "retrieval_policy": "single",
             "_tool_execution_summary": "tools=s1:github_search=ok:2",
@@ -851,18 +866,18 @@ def test_process_update_writes_debug_event(tmp_path: Path):
                 }
             ],
             "_graph_elapsed_ms": 1234,
-            "_node_timings": [{"node": "info_gap_assessor", "elapsed_ms": 100}],
+            "_node_timings": [{"node": "turn_interpreter", "elapsed_ms": 100}],
             "_llm_usage_summary": {
                 "calls": 2,
                 "elapsed_ms": 900,
                 "input_tokens": 120,
                 "output_tokens": 80,
                 "total_tokens": 200,
-                "by_node": {"info_gap_assessor": {"calls": 2, "elapsed_ms": 900}},
+                "by_node": {"turn_interpreter": {"calls": 2, "elapsed_ms": 900}},
             },
             "_llm_trace": [
                 {
-                    "node": "info_gap_assessor",
+                    "node": "turn_interpreter",
                     "kind": "business_json",
                     "model": "openai/gpt-5.4-mini",
                     "tier": "low",
@@ -910,12 +925,22 @@ def test_process_update_writes_debug_event(tmp_path: Path):
     assert event["send_results"][0]["message_id"] == "9000"
     assert isinstance(event["graph_elapsed_ms"], int)
     assert event["graph_elapsed_ms"] >= 0
-    assert event["node_timings"] == [{"node": "info_gap_assessor", "elapsed_ms": 100}]
+    assert event["node_timings"] == [{"node": "turn_interpreter", "elapsed_ms": 100}]
     assert event["llm_usage_summary"]["calls"] == 2
     assert event["llm_usage_summary"]["total_tokens"] == 200
     assert event["llm_trace"][0]["model"] == "openai/gpt-5.4-mini"
     assert event["time_budget"]["target_elapsed_ms"] == 30000
     assert event["ask_user_guard_reason"] == "ask_user_without_required_info"
+    assert event["turn_relation"] == "new_task"
+    assert event["core_deliverable_preview"] == "actionable result"
+    assert event["context_requirement"] == "none"
+    assert event["input_locales"] == ["en"]
+    assert event["communication_locale"] == "en"
+    assert event["requested_output_locale"] == ""
+    assert event["locale_source"] == "current_message"
+    assert event["response_locale"] == "en"
+    assert event["contract_route"] == "retrieve"
+    assert event["compliance_decision"] == "accept"
 
 
 def test_group_reply_to_non_bot_is_ignored_without_mention():
@@ -1520,7 +1545,7 @@ def test_process_update_runner_error_returns_fallback_message():
     row = gateway.process_update(_sample_update(text="@NBCKB_Bot hello"), dry_run=False)
     assert row["ignored"] is False
     assert row["sent_count"] == 1
-    assert "处理请求时发生错误" in fake_api.sent_requests[0]["payload"]["text"]
+    assert "I could not prepare the answer" in fake_api.sent_requests[0]["payload"]["text"]
 
 
 def test_process_update_splits_long_response():

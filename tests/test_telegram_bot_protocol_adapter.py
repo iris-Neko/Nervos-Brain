@@ -25,7 +25,7 @@ def test_update_to_envelope_basic_text():
     assert env["context"]["platform"] == "telegram"
     assert env["context"]["user_id"] == "42"
     assert env["context"]["channel_id"] == "123456"
-    assert env["locale_hint"] == "en"
+    assert env["platform_locale_hint"] == "en"
 
 
 def test_update_to_envelope_prefers_english_text_over_chinese_account_locale():
@@ -42,7 +42,7 @@ def test_update_to_envelope_prefers_english_text_over_chinese_account_locale():
     env = telegram_update_to_message_envelope(update)
 
     assert env["content"] == "What is CKB, I am a rookie"
-    assert env["locale_hint"] == "en"
+    assert env["platform_locale_hint"] == "zh-hans"
 
 
 def test_update_to_envelope_prefers_chinese_text_over_english_account_locale():
@@ -59,7 +59,7 @@ def test_update_to_envelope_prefers_chinese_text_over_english_account_locale():
     env = telegram_update_to_message_envelope(update)
 
     assert env["content"] == "CKB 是什么？我是新手"
-    assert env["locale_hint"] == "zh-CN"
+    assert env["platform_locale_hint"] == "en"
 
 
 def test_update_to_envelope_strips_bot_mention_from_group_message():
@@ -174,7 +174,7 @@ def test_envelope_to_graph_state_shape():
         "message_id": "99",
         "context": {"platform": "telegram", "user_id": "42", "channel_id": "123456"},
         "content": "hello",
-        "locale_hint": "zh-CN",
+        "platform_locale_hint": "zh-CN",
     }
     state = message_envelope_to_graph_state(env, request_id="req-x")
     assert state["request_id"] == "req-x"
