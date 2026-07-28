@@ -580,11 +580,13 @@ def test_retriever_vector_path(populated_retriever):
     assert "anchor" in e and "title" in e and "score" in e and "snippet" in e
 
 
-def test_retriever_broad_resource_query_uses_vector_without_filters(monkeypatch, populated_retriever):
-    calls: list[dict] = []
+def test_retriever_uses_fast_lexical_results_without_fuzzy_scan(
+    monkeypatch, populated_retriever
+):
+    vector_calls: list[dict] = []
 
     def fake_vector_search(query, filters, top_k):
-        calls.append({"query": query, "filters": filters, "top_k": top_k})
+        vector_calls.append({"query": query, "filters": filters, "top_k": top_k})
         return [
             {
                 "anchor": "doc:resources#chunk:0",
@@ -594,18 +596,44 @@ def test_retriever_broad_resource_query_uses_vector_without_filters(monkeypatch,
             }
         ]
 
-    def fail_slow_path(*_args, **_kwargs):
-        raise AssertionError("broad resource query should not run slow archive paths")
+    def fail_fuzzy_path(*_args, **_kwargs):
+        raise AssertionError("fuzzy fallback should not run after a BM25 hit")
 
     monkeypatch.setattr(populated_retriever, "_vector_search", fake_vector_search)
-    monkeypatch.setattr(populated_retriever, "_bm25_search", fail_slow_path)
-    monkeypatch.setattr(populated_retriever, "_fuzzy_search", fail_slow_path)
-    monkeypatch.setattr(populated_retriever, "_exact_search", fail_slow_path)
+    monkeypatch.setattr(populated_retriever, "_fuzzy_search", fail_fuzzy_path)
 
-    results = populated_retriever.search("CKB 入门有没有比较靠谱的资料可以看？", top_k=3)
+    results = populated_retriever.search("open channel capacity", top_k=3)
 
     assert results
-    assert calls[0]["filters"] == {}
+    assert vector_calls[0]["filters"] == {}
+
+
+def test_retriever_uses_fuzzy_as_fallback_after_lexical_miss(
+    monkeypatch, populated_retriever
+):
+    fuzzy_calls: list[str] = []
+
+    monkeypatch.setattr(populated_retriever, "_vector_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(populated_retriever, "_bm25_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(populated_retriever, "_exact_search", lambda *_args, **_kwargs: [])
+
+    def fake_fuzzy_search(query, *_args, **_kwargs):
+        fuzzy_calls.append(query)
+        return [
+            {
+                "anchor": "doc:channel-manager#chunk:0",
+                "title": "ChannelManager",
+                "source": "fiber",
+                "score": 0.9,
+            }
+        ]
+
+    monkeypatch.setattr(populated_retriever, "_fuzzy_search", fake_fuzzy_search)
+
+    results = populated_retriever.search("chanell manager", top_k=3)
+
+    assert fuzzy_calls == ["chanell manager"]
+    assert results[0]["anchor"] == "doc:channel-manager#chunk:0"
 
 
 def test_retriever_llm_regex_query_hard_recalls_named_project(

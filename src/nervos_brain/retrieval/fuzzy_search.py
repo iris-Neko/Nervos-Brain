@@ -28,8 +28,21 @@ class FuzzyResult:
     matched_field: str    # which field produced the best match
 
 
-def _ratio(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+def _ratio(a: str, b: str, *, minimum: float = 0.0) -> float:
+    """Return the similarity ratio, skipping pairs that cannot reach minimum."""
+    left = a.lower()
+    right = b.lower()
+    total_length = len(left) + len(right)
+    if total_length == 0:
+        return 0.0
+
+    # Even a perfect alignment cannot match more than twice the shorter
+    # string's length. This cheap bound avoids expensive edit comparisons
+    # between a full natural-language question and short keyword tokens.
+    upper_bound = (2.0 * min(len(left), len(right))) / total_length
+    if upper_bound < minimum:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
 
 
 def fuzzy_search(
@@ -65,21 +78,21 @@ def fuzzy_search(
         best_field = ""
 
         # title
-        s = _ratio(query, title)
+        s = _ratio(query, title, minimum=max(threshold, best_score))
         if s > best_score:
             best_score, best_field = s, "title"
 
         # keyword tokens (individual terms are often more informative than
         # the full keyword string)
         for kw in _split_keywords(keywords):
-            s = _ratio(query, kw)
+            s = _ratio(query, kw, minimum=max(threshold, best_score))
             if s > best_score:
                 best_score, best_field = s, f"keyword:{kw}"
 
         # anchor (e.g. "doc:open-channel-rfc#chunk:0")
         # strip the structural prefix before comparing
         anchor_stem = anchor.split("#")[0].replace("doc:", "").replace("-", " ")
-        s = _ratio(query, anchor_stem)
+        s = _ratio(query, anchor_stem, minimum=max(threshold, best_score))
         if s > best_score:
             best_score, best_field = s, "anchor"
 
