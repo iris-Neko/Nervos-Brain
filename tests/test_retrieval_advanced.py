@@ -13,6 +13,9 @@ All tests run fully offline (no API calls, no persistent disk state).
 Each test that touches Qdrant or SQLite uses pytest's tmp_path fixture.
 """
 
+from difflib import SequenceMatcher
+import re
+
 import pytest
 
 from nervos_brain.retrieval import (
@@ -21,6 +24,7 @@ from nervos_brain.retrieval import (
     BM25Index,
     DualLayerWriter,
     FusedResult,
+    FuzzyIndex,
     FuzzyResult,
     MultiRetriever,
     QdrantStore,
@@ -470,6 +474,47 @@ def test_fuzzy_result_has_matched_field(capsys):
     assert any(h.matched_field for h in hits)  # matched_field is non-empty
 
 
+def test_fuzzy_index_reuses_prebuilt_choices_and_matches_convenience_function():
+    index = FuzzyIndex(_CANDIDATES)
+    query = "chanell manager"
+
+    indexed = index.search(query, threshold=0.4, top_k=3)
+    one_shot = fuzzy_search(query, _CANDIDATES, threshold=0.4, top_k=3)
+
+    legacy: list[tuple[str, float]] = []
+    for candidate in _CANDIDATES:
+        fields = [candidate["title"]]
+        fields.extend(re.split(r"[,;\s]+", candidate["keywords"].strip()))
+        fields.append(
+            candidate["anchor"].split("#")[0].replace("doc:", "").replace("-", " ")
+        )
+        score = max(
+            SequenceMatcher(None, query.lower(), field.lower()).ratio()
+            for field in fields
+            if field
+        )
+        if score >= 0.4:
+            legacy.append((candidate["anchor"], score))
+    legacy.sort(key=lambda row: row[1], reverse=True)
+
+    assert index.size == len(_CANDIDATES)
+    assert index.choice_count > index.size
+    assert [hit.anchor for hit in indexed] == [hit.anchor for hit in one_shot]
+    assert [hit.score for hit in indexed] == [hit.score for hit in one_shot]
+    assert [hit.anchor for hit in indexed] == [anchor for anchor, _score in legacy[:3]]
+    assert [hit.score for hit in indexed] == pytest.approx(
+        [score for _anchor, score in legacy[:3]]
+    )
+
+
+def test_fuzzy_index_honors_filtered_candidate_owners():
+    index = FuzzyIndex(_CANDIDATES)
+
+    hits = index.search("locktime", threshold=0.7, allowed_owners={1})
+
+    assert [hit.anchor for hit in hits] == ["doc:htlc-spec#chunk:0"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # reciprocal_rank_fusion
 # ═══════════════════════════════════════════════════════════════════════════
@@ -580,10 +625,11 @@ def test_retriever_vector_path(populated_retriever):
     assert "anchor" in e and "title" in e and "score" in e and "snippet" in e
 
 
-def test_retriever_uses_fast_lexical_results_without_fuzzy_scan(
+def test_retriever_fuses_fuzzy_results_with_other_lexical_paths(
     monkeypatch, populated_retriever
 ):
     vector_calls: list[dict] = []
+    fuzzy_calls: list[str] = []
 
     def fake_vector_search(query, filters, top_k):
         vector_calls.append({"query": query, "filters": filters, "top_k": top_k})
@@ -596,16 +642,31 @@ def test_retriever_uses_fast_lexical_results_without_fuzzy_scan(
             }
         ]
 
-    def fail_fuzzy_path(*_args, **_kwargs):
-        raise AssertionError("fuzzy fallback should not run after a BM25 hit")
+    def fake_fuzzy_search(query, *_args, **_kwargs):
+        fuzzy_calls.append(query)
+        return []
 
     monkeypatch.setattr(populated_retriever, "_vector_search", fake_vector_search)
-    monkeypatch.setattr(populated_retriever, "_fuzzy_search", fail_fuzzy_path)
+    monkeypatch.setattr(populated_retriever, "_fuzzy_search", fake_fuzzy_search)
 
     results = populated_retriever.search("open channel capacity", top_k=3)
 
     assert results
     assert vector_calls[0]["filters"] == {}
+    assert fuzzy_calls == ["open channel capacity"]
+
+
+def test_retriever_reuses_fuzzy_index_without_rescanning_archive(
+    monkeypatch, populated_retriever
+):
+    def fail_archive_scan():
+        raise AssertionError("prebuilt fuzzy index should not rescan the archive")
+
+    monkeypatch.setattr(populated_retriever._archive, "list_all", fail_archive_scan)
+
+    results = populated_retriever._fuzzy_search("chanell manager", 3, 0.4)
+
+    assert results
 
 
 def test_retriever_uses_fuzzy_as_fallback_after_lexical_miss(

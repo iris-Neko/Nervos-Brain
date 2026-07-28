@@ -24,7 +24,7 @@ from .config import RetrievalConfig, load_retrieval_config
 from .dual_layer import ArchiveRecord, ArchiveStore
 from .embedding import get_embedding
 from .evidence_adapter import qdrant_result_to_evidence
-from .fuzzy_search import fuzzy_search
+from .fuzzy_search import FuzzyIndex, fuzzy_search
 from .qdrant_writer import QdrantStore
 from .rank_fusion import FusedResult, reciprocal_rank_fusion
 from .search import _build_filter_must
@@ -136,6 +136,8 @@ class MultiRetriever:
         )
         self._archive = archive_store or ArchiveStore(config=self._cfg)
         self._bm25 = BM25Index()
+        self._fuzzy_index = FuzzyIndex()
+        self._indexed_records: list[ArchiveRecord] = []
         self._last_regex_summary: dict[str, Any] = {
             "regex_queries_count": 0,
             "regex_valid_count": 0,
@@ -145,8 +147,14 @@ class MultiRetriever:
     # ── index management ───────────────────────────────────────────────────
 
     def rebuild_bm25(self) -> int:
-        """Rebuild the BM25 index from the current archive contents."""
-        self._bm25.build_from_store(self._archive)
+        """Rebuild the reusable lexical indexes from the archive contents."""
+        records = self._archive.list_all()
+        self._indexed_records = records
+        self._bm25.build(records)
+        if self._cfg.enable_fuzzy:
+            self._fuzzy_index.build(records)
+        else:
+            self._fuzzy_index.build(())
         return self._bm25.size
 
     # ── main search entry point ────────────────────────────────────────────
@@ -208,10 +216,11 @@ class MultiRetriever:
                 path_names.append("exact")
 
         # ── 4. Fuzzy match ─────────────────────────────────────────────────
-        # Fuzzy matching scans archive names and is intended to recover a
-        # lexical miss such as a typo. Use it only when the faster lexical
-        # paths found nothing; semantic/vector evidence remains independent.
-        if cfg.enable_fuzzy and not bm25_results and not exact_results:
+        # RapidFuzz cheaply shortlists the full naming index, then the legacy
+        # scorer reranks that shortlist. Keep this path in the fusion even
+        # when another lexical path has hits so typo recall is not gated by a
+        # weak BM25 or exact match.
+        if cfg.enable_fuzzy:
             fuzzy_results = self._fuzzy_search(
                 query, per_path_k, cfg.fuzzy_threshold, filters
             )
@@ -277,9 +286,10 @@ class MultiRetriever:
         self, query: str, top_k: int, filters: Optional[Dict[str, str]] = None
     ) -> List[dict]:
         if filters:
+            source_records = self._indexed_records or self._archive.list_all()
             records = [
                 record
-                for record in self._archive.list_all()
+                for record in source_records
                 if self._record_matches_filters(record, filters)
             ]
             if not records:
@@ -325,7 +335,31 @@ class MultiRetriever:
     def _fuzzy_search(
         self, query: str, top_k: int, threshold: float, filters: Optional[Dict[str, str]] = None
     ) -> List[dict]:
-        # Build candidate list from archive (titles + keywords only, cheap)
+        if self._fuzzy_index.size > 0:
+            allowed_owners: set[int] | None = None
+            if filters:
+                allowed_owners = {
+                    index
+                    for index, record in enumerate(self._indexed_records)
+                    if self._record_matches_filters(record, filters)
+                }
+            hits = self._fuzzy_index.search(
+                query,
+                threshold=threshold,
+                top_k=top_k,
+                allowed_owners=allowed_owners,
+            )
+            return [
+                {
+                    "anchor": hit.anchor,
+                    "title": hit.title,
+                    "source": hit.source,
+                    "score": hit.score,
+                }
+                for hit in hits
+            ]
+
+        # Backward-compatible lazy path for callers that did not rebuild.
         candidates = [
             {
                 "anchor": r.anchor,

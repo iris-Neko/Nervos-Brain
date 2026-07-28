@@ -7,7 +7,7 @@ M4B dual-layer + multi-path extensions:
   DualLayerWriter   — sync write to Qdrant (shallow index) + SQLite (archive)
   ArchiveStore      — raw content store (deep layer)
   BM25Index         — in-memory keyword index built from the archive
-  fuzzy_search()    — difflib-based naming-variant matching
+  FuzzyIndex        — reusable RapidFuzz prefilter + legacy-score reranker
   rank_fusion       — Reciprocal Rank Fusion across all paths
   MultiRetriever    — orchestrates all 4 paths → fused Evidence
 """
@@ -36,7 +36,7 @@ from .dual_layer import ArchiveRecord, ArchiveStore, DualLayerWriter
 
 # M4B: multi-path retrieval
 from .bm25_index import BM25Index, BM25Result, tokenize
-from .fuzzy_search import FuzzyResult, fuzzy_search
+from .fuzzy_search import FuzzyIndex, FuzzyResult, fuzzy_search
 from .rank_fusion import FusedResult, reciprocal_rank_fusion
 from .multi_retriever import MultiRetriever
 from .composite_retriever import (
@@ -74,6 +74,7 @@ __all__ = [
     "BM25Result",
     "tokenize",
     "FuzzyResult",
+    "FuzzyIndex",
     "fuzzy_search",
     "FusedResult",
     "reciprocal_rank_fusion",
