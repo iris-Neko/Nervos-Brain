@@ -30,6 +30,7 @@ import sqlite3
 import threading
 import time
 from array import array
+from collections import OrderedDict
 from typing import Any, Dict, List, Sequence
 
 from nervos_brain.pathing import resolve_project_path
@@ -417,11 +418,36 @@ def embed_documents(
     return [list(vec) for vec in raw]
 
 
+_QUERY_CACHE: "OrderedDict[tuple, List[float]]" = OrderedDict()
+_QUERY_CACHE_LOCK = threading.Lock()
+_QUERY_CACHE_SIZE = 256
+
+
 def embed_query(text: str, config: RetrievalConfig | None = None) -> List[float]:
-    """Encode one query (with ``embedding_query_prefix``)."""
+    """Encode one query (with ``embedding_query_prefix``).
+
+    The online runtime queries three collections that share one model, so the
+    same query text is encoded three times per search; a small LRU keeps it to one.
+    """
     cfg = config or load_retrieval_config()
+    key = (
+        _embedder_key(cfg, resolve_backend(cfg)),
+        cfg.embedding_query_prefix,
+        bool(cfg.embedding_normalize),
+        text,
+    )
+    with _QUERY_CACHE_LOCK:
+        cached = _QUERY_CACHE.get(key)
+        if cached is not None:
+            _QUERY_CACHE.move_to_end(key)
+            return list(cached)
     raw = get_embedder(cfg).encode([f"{cfg.embedding_query_prefix}{text}"])[0]
-    return _l2_normalize(raw) if cfg.embedding_normalize else list(raw)
+    vec = _l2_normalize(raw) if cfg.embedding_normalize else list(raw)
+    with _QUERY_CACHE_LOCK:
+        _QUERY_CACHE[key] = vec
+        while len(_QUERY_CACHE) > _QUERY_CACHE_SIZE:
+            _QUERY_CACHE.popitem(last=False)
+    return list(vec)
 
 
 def index_vectors(

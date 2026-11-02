@@ -53,6 +53,13 @@ class CountingEmbedder:
         return [[float(len(t) % 7 + 1 + i) for i in range(self.dim)] for t in texts]
 
 
+@pytest.fixture(autouse=True)
+def _clear_query_cache():
+    embedding_module._QUERY_CACHE.clear()
+    yield
+    embedding_module._QUERY_CACHE.clear()
+
+
 @pytest.fixture()
 def counting(monkeypatch):
     embedder = CountingEmbedder()
@@ -378,3 +385,40 @@ def test_embedding_cache_round_trip(tmp_path):
     assert cache.get_many(["h1"], "model-b") == {}
     assert cache.count("model-a") == 2
     cache.close()
+
+
+# ── query vector cache ─────────────────────────────────────────────────────
+
+
+def test_repeated_query_is_encoded_once(counting, tmp_path):
+    cfg = _real_cfg(tmp_path)
+
+    first = embed_query("open a channel", cfg)
+    second = embed_query("open a channel", cfg)  # the other two collections of one search
+
+    assert counting.calls == [["open a channel"]]
+    assert first == second
+    second[0] = -1.0
+    assert embed_query("open a channel", cfg)[0] != -1.0, "callers get a copy"
+
+
+def test_query_cache_is_keyed_by_text_prefix_and_model(counting, tmp_path):
+    base = _real_cfg(tmp_path)
+    embed_query("a", base)
+    embed_query("b", base)
+    embed_query("a", _cfg(tmp_path, embedding_backend="local", embedding_model="m", vector_size=8,
+                          embedding_query_prefix="query: "))
+    embed_query("a", _cfg(tmp_path, embedding_backend="local", embedding_model="other", vector_size=8))
+
+    assert len(counting.calls) == 4
+
+
+def test_query_cache_is_bounded(counting, tmp_path, monkeypatch):
+    monkeypatch.setattr(embedding_module, "_QUERY_CACHE_SIZE", 2)
+    cfg = _real_cfg(tmp_path)
+    for text in ("a", "b", "c"):
+        embed_query(text, cfg)
+
+    embed_query("a", cfg)  # evicted, encoded again
+
+    assert len(counting.calls) == 4
