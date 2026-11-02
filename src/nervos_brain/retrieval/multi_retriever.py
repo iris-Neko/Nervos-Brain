@@ -13,6 +13,7 @@ RetrievalConfig, so you can turn off any path without touching the code.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -22,12 +23,14 @@ from nervos_brain.core_protocols import Evidence
 from .bm25_index import BM25Index
 from .config import RetrievalConfig, load_retrieval_config
 from .dual_layer import ArchiveRecord, ArchiveStore
-from .embedding import get_embedding
+from .embedding import embed_query, vector_path_status
 from .evidence_adapter import qdrant_result_to_evidence
 from .fuzzy_search import FuzzyIndex, fuzzy_search
 from .qdrant_writer import QdrantStore
 from .rank_fusion import FusedResult, reciprocal_rank_fusion
 from .search import _build_filter_must
+
+logger = logging.getLogger(__name__)
 
 
 _REGEX_FIELDS = {"title", "keywords", "anchor", "url", "summary", "raw_text"}
@@ -138,6 +141,7 @@ class MultiRetriever:
         self._bm25 = BM25Index()
         self._fuzzy_index = FuzzyIndex()
         self._indexed_records: list[ArchiveRecord] = []
+        self._vector_state: tuple[bool, str] | None = None
         self._last_regex_summary: dict[str, Any] = {
             "regex_queries_count": 0,
             "regex_valid_count": 0,
@@ -156,6 +160,41 @@ class MultiRetriever:
         else:
             self._fuzzy_index.build(())
         return self._bm25.size
+
+    def check_vector_path(self, *, warmup: bool = False) -> tuple[bool, str]:
+        """Decide whether the vector path may run, and log why not.
+
+        Checks the config switches (``enable_vector``, test-only hash
+        backend), then that the Qdrant collection matches the embedding
+        backend (vector size and ``embedding_model`` label). With ``warmup``
+        the embedding model is loaded now, so a broken backend is reported at
+        startup instead of on the first query.
+        """
+        enabled, reason = vector_path_status(self._cfg)
+        if enabled:
+            checker = getattr(self._qdrant, "vector_compatibility", None)
+            if callable(checker):
+                enabled, reason = checker()
+        if enabled and warmup:
+            try:
+                embed_query("warmup", self._cfg)
+            except Exception as exc:
+                enabled, reason = False, f"embedding backend failed: {exc}"
+
+        collection = self._cfg.collection_name
+        if enabled:
+            logger.info("vector path enabled for collection %s", collection)
+        elif not self._cfg.enable_vector or reason == "embedding_backend is none":
+            logger.info("vector path disabled for collection %s: %s", collection, reason)
+        else:
+            logger.error("vector path DISABLED for collection %s: %s", collection, reason)
+        self._vector_state = (enabled, reason)
+        return self._vector_state
+
+    @property
+    def vector_status(self) -> dict[str, Any]:
+        enabled, reason = self._vector_state or self.check_vector_path()
+        return {"enabled": enabled, "reason": reason}
 
     # ── main search entry point ────────────────────────────────────────────
 
@@ -194,10 +233,11 @@ class MultiRetriever:
         self._last_regex_summary = regex_meta
 
         # ── 1. Vector search ───────────────────────────────────────────────
-        vec_results = self._vector_search(query, filters or {}, per_path_k)
-        if vec_results:
-            ranked_lists.append(vec_results)
-            path_names.append("vector")
+        if self.vector_status["enabled"]:
+            vec_results = self._vector_search(query, filters or {}, per_path_k)
+            if vec_results:
+                ranked_lists.append(vec_results)
+                path_names.append("vector")
 
         # ── 2. BM25 keyword search ─────────────────────────────────────────
         bm25_results: List[dict] = []
@@ -258,9 +298,9 @@ class MultiRetriever:
     def _vector_search(
         self, query: str, filters: Dict[str, str], top_k: int
     ) -> List[dict]:
-        query_vec = get_embedding(query, self._cfg)
         query_filter = _build_filter_must(filters) if filters else None
         try:
+            query_vec = embed_query(query, self._cfg)
             response = self._qdrant.client.query_points(
                 collection_name=self._qdrant.config.collection_name,
                 query=query_vec,
@@ -279,7 +319,12 @@ class MultiRetriever:
                 for r in response.points
                 if r.payload
             ]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "vector search failed for collection %s: %s",
+                self._cfg.collection_name,
+                exc,
+            )
             return []
 
     def _bm25_search(

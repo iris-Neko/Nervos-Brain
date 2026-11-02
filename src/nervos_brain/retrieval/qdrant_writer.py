@@ -7,20 +7,10 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from .config import RetrievalConfig
+from .embedding import deterministic_embedding, index_vectors, model_label
 from nervos_brain.pathing import resolve_project_path
 
-
-def deterministic_embedding(text: str, dim: int = 64) -> List[float]:
-    """确定性 embedding（M4 本地最小实现）。
-
-    用哈希生成固定长度向量，便于本地可重复测试。
-    """
-    vec: List[float] = []
-    for i in range(dim):
-        h = hashlib.sha256(f"{i}:{text}".encode("utf-8")).hexdigest()
-        # 映射到 [-1, 1]
-        vec.append(((int(h[:8], 16) / 0xFFFFFFFF) * 2.0) - 1.0)
-    return vec
+__all__ = ["QdrantStore", "deterministic_embedding"]
 
 
 class QdrantStore:
@@ -68,22 +58,74 @@ class QdrantStore:
             )
 
     def upsert_chunks(self, chunks: List[Dict[str, str]]) -> int:
-        """批量写入切片。"""
+        """批量写入切片。向量由配置的 embedding 后端批量编码。"""
+        if not chunks:
+            return 0
+        texts = [item["text"] for item in chunks]
+        vectors = index_vectors(texts, self.config)
+        label = model_label(self.config)
         points: List[PointStruct] = []
-        for item in chunks:
+        for item, vector in zip(chunks, vectors):
             text = item["text"]
             payload = dict(item["payload"])
             payload["snippet"] = text[: self.config.snippet_max_chars]
+            payload["embedding_model"] = label
             points.append(
                 PointStruct(
                     id=_stable_point_id(text, payload),
-                    vector=deterministic_embedding(text, self.config.vector_size),
+                    vector=vector,
                     payload=payload,
                 )
             )
 
         self.client.upsert(collection_name=self.config.collection_name, points=points)
         return len(points)
+
+    def vector_compatibility(self) -> tuple[bool, str]:
+        """Check that the collection was built by the configured embedding.
+
+        Compares the collection's vector size with ``vector_size`` and the
+        ``embedding_model`` payload label of a sample point with the backend's
+        label. Collections written before the label existed were built with
+        hash vectors.
+        """
+        name = self.config.collection_name
+        expected = model_label(self.config)
+        rebuild_hint = (
+            "rebuild it with `python scripts/migrate_qdrant_server_from_archive.py --recreate`"
+        )
+        try:
+            info = self.client.get_collection(name)
+        except Exception as exc:
+            return False, f"cannot read Qdrant collection {name!r}: {exc}"
+        vectors = info.config.params.vectors
+        size = getattr(vectors, "size", None)
+        if size is None:
+            return False, f"collection {name!r} uses named vectors, which the vector path does not support"
+        if int(size) != int(self.config.vector_size):
+            return False, (
+                f"collection {name!r} stores {size}-dim vectors but the embedding backend "
+                f"({expected}) expects {self.config.vector_size}; {rebuild_hint}"
+            )
+        try:
+            points, _ = self.client.scroll(
+                collection_name=name, limit=1, with_payload=True, with_vectors=False
+            )
+        except Exception as exc:
+            return False, f"cannot sample Qdrant collection {name!r}: {exc}"
+        if points:
+            stored = (points[0].payload or {}).get("embedding_model")
+            if stored is None and not expected.startswith("hash-"):
+                return False, (
+                    f"collection {name!r} has no embedding_model metadata (built by the old "
+                    f"hash writer) but the backend is {expected}; {rebuild_hint}"
+                )
+            if stored is not None and str(stored) != expected:
+                return False, (
+                    f"collection {name!r} was built with {stored} but the backend is "
+                    f"{expected}; {rebuild_hint}"
+                )
+        return True, ""
 
     def delete_by_hashes(self, hashes: List[str]) -> int:
         """Delete Qdrant points whose stable IDs are derived from content hashes."""

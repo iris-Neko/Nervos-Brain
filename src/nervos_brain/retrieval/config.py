@@ -103,8 +103,26 @@ class RetrievalConfig:
     archive_db: str = "data/archive.db"
 
     # Embedding
+    # embedding_backend: local | api | hash | none。为空时按旧开关
+    # use_real_embedding 推断（true → api，false → hash）。
+    # hash 只给测试用：非测试环境下 hash/none 都会关闭向量路。
     use_real_embedding: bool = False
+    embedding_backend: str = ""
     embedding_model: str = "openai/embedding-2"
+    embedding_batch_size: int = 32
+    embedding_normalize: bool = True
+    embedding_query_prefix: str = ""
+    embedding_doc_prefix: str = ""
+    embedding_api_base: str = ""
+    embedding_api_key_env: str = ""
+    embedding_device: str = ""
+    embedding_max_seq_length: int = 512
+    embedding_max_retries: int = 3
+    # 文档向量缓存（SQLite，键 = 编码文本哈希 + 模型）。空字符串 = 不缓存。
+    embedding_cache_db: str = "data/embedding_cache/embeddings.db"
+    # 显式允许 hash 向量参与检索（pytest 运行时自动允许）。
+    embedding_allow_hash: bool = False
+    enable_vector: bool = True
 
     # 多路检索参数
     top_k_per_path: int = 10
@@ -146,7 +164,22 @@ def load_retrieval_config(
         snippet_max_chars=int(cfg.get("snippet_max_chars", 1200)),
         archive_db=cfg.get("archive_db", "data/archive.db"),
         use_real_embedding=_bool_cfg(cfg.get("use_real_embedding", False), False),
+        embedding_backend=str(cfg.get("embedding_backend", "") or "").strip().lower(),
         embedding_model=cfg.get("embedding_model", "openai/embedding-2"),
+        embedding_batch_size=int(cfg.get("embedding_batch_size", 32)),
+        embedding_normalize=_bool_cfg(cfg.get("embedding_normalize", True), True),
+        embedding_query_prefix=str(cfg.get("embedding_query_prefix", "") or ""),
+        embedding_doc_prefix=str(cfg.get("embedding_doc_prefix", "") or ""),
+        embedding_api_base=str(cfg.get("embedding_api_base", "") or "").strip(),
+        embedding_api_key_env=str(cfg.get("embedding_api_key_env", "") or "").strip(),
+        embedding_device=str(cfg.get("embedding_device", "") or "").strip(),
+        embedding_max_seq_length=int(cfg.get("embedding_max_seq_length", 512)),
+        embedding_max_retries=int(cfg.get("embedding_max_retries", 3)),
+        embedding_cache_db=str(
+            cfg.get("embedding_cache_db", "data/embedding_cache/embeddings.db") or ""
+        ).strip(),
+        embedding_allow_hash=_bool_cfg(cfg.get("embedding_allow_hash", False), False),
+        enable_vector=_bool_cfg(cfg.get("enable_vector", True), True),
         top_k_per_path=int(cfg.get("top_k_per_path", 10)),
         final_top_k=int(cfg.get("final_top_k", 10)),
         rrf_k=int(cfg.get("rrf_k", 60)),

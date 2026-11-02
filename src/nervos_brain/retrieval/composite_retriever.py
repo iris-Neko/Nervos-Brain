@@ -181,6 +181,7 @@ def build_configured_retriever(
             archive_store=archive,
             config=cfg,
         )
+        retriever.check_vector_path(warmup=True)
         backends.append(
             RetrievalBackend(
                 name=name,
@@ -196,6 +197,7 @@ def build_configured_retriever(
         qdrant = QdrantStore(config=cfg, qdrant_location=cfg.qdrant_path)
         archive = ArchiveStore(db_path=cfg.archive_db, config=cfg)
         retriever = MultiRetriever(qdrant_store=qdrant, archive_store=archive, config=cfg)
+        retriever.check_vector_path(warmup=True)
         if rebuild_bm25:
             retriever.rebuild_bm25()
         return retriever

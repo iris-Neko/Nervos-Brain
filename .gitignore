@@ -31,6 +31,8 @@ data/tmp/
 data/ingest_state/
 data/tmp*.db
 data/qdrant_server/
+data/embedding_cache/
+data/qdrant_eval/
 
 # Temporary/debug vector stores
 *.lock

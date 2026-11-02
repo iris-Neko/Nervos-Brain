@@ -21,6 +21,10 @@ dependencies = [
   "markdown-it-py>=4.0.0",
 ]
 
+[project.optional-dependencies]
+# embedding_backend=local needs sentence-transformers (plus a torch build for your GPU)
+local-embedding = ["sentence-transformers>=3.0"]
+
 # 这是给咱们的质检机器人 pytest 专门看的地图
 [tool.pytest.ini_options]
 pythonpath = [

@@ -31,7 +31,16 @@ from .readers import read_text_file
 from .search import search_with_filters
 
 # M4B: dual-layer storage
-from .embedding import get_embedding
+from .embedding import (
+    EmbeddingCache,
+    EmbeddingError,
+    embed_documents,
+    embed_query,
+    get_embedding,
+    model_label,
+    resolve_backend,
+    vector_path_status,
+)
 from .dual_layer import ArchiveRecord, ArchiveStore, DualLayerWriter
 
 # M4B: multi-path retrieval
@@ -66,6 +75,13 @@ __all__ = [
     "qdrant_result_to_evidence",
     # M4B: storage
     "get_embedding",
+    "embed_documents",
+    "embed_query",
+    "EmbeddingCache",
+    "EmbeddingError",
+    "model_label",
+    "resolve_backend",
+    "vector_path_status",
     "ArchiveRecord",
     "ArchiveStore",
     "DualLayerWriter",

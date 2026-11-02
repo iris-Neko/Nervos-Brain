@@ -21,7 +21,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from .anchor_hash import build_stable_hash
 from .config import RetrievalConfig, load_retrieval_config
 from nervos_brain.pathing import resolve_project_path
-from .embedding import get_embedding
 from .qdrant_writer import QdrantStore
 
 
