@@ -1,0 +1,59 @@
+{"qid": "q01", "group": "zh", "kind": "case", "query": "我想做一个 CKB 钱包 demo，先看哪些资料比较合适？", "source": "wk7-rec-001"}
+{"qid": "q02", "group": "zh", "kind": "case", "query": "我准备做 Fiber 支付通道 PoC，先读哪些资料效率最高？", "source": "wk7-rec-002"}
+{"qid": "q03", "group": "zh", "kind": "case", "query": "怎么用 Fiber SDK 开通支付通道？", "source": "wk7-guide-001"}
+{"qid": "q04", "group": "zh", "kind": "case", "query": "我想写一个交易记账 app，要怎么拆开发步骤？", "source": "wk7-guide-002"}
+{"qid": "q05", "group": "zh", "kind": "case", "query": "Fiber 通道里的 HTLC timeout 看起来不对，我该从哪里排查？", "source": "wk7-trouble-001"}
+{"qid": "q06", "group": "zh", "kind": "case", "query": "文档和仓库示例里的 openChannel 参数不一样，怎么判断谁是对的？", "source": "wk7-trouble-002"}
+{"qid": "q07", "group": "zh", "kind": "case", "query": "Cell Model 和 account model 的核心区别是什么？", "source": "supplement-ckb-deep-dev-001"}
+{"qid": "q08", "group": "zh", "kind": "case", "query": "用 CCC 写一个最小 CKB 转账示例需要哪些步骤？", "source": "supplement-ccc-ts-dev-001"}
+{"qid": "q09", "group": "zh", "kind": "case", "query": "如何给我的 agent 搭建一个 Fiber 节点，让它掌握一个 CKB 钱包，然后通过 Fiber 和我转账？", "source": "supplement-fiber-dev-001"}
+{"qid": "q10", "group": "zh", "kind": "case", "query": "Spore 和普通 NFT 有什么区别？DOB 的链上数据和链下数据怎么理解？", "source": "supplement-spore-dob-creator-001"}
+{"qid": "q11", "group": "zh", "kind": "case", "query": "我是 EVM 开发者，怎么开始理解 CKB？", "source": "supplement-web3-dev-001"}
+{"qid": "q12", "group": "zh", "kind": "case", "query": "CKB 是什么？新手怎么系统地学习 CKB？", "source": "supplement-beginner-001"}
+{"qid": "q13", "group": "zh", "kind": "case", "query": "CKB 地址、capacity、手续费这些概念怎么理解？capacity 不够怎么办？", "source": "supplement-wallet-user-001"}
+{"qid": "q14", "group": "zh", "kind": "case", "query": "Nervos 生态里有哪些类型的项目？", "source": "supplement-community-ops-001"}
+{"qid": "q15", "group": "zh", "kind": "case", "query": "fiber wasm 是怎么实现的？和 native 的有什么区别？", "source": "human-fiber-wasm-after-code-db-001"}
+{"qid": "q16", "group": "zh", "kind": "case", "query": "社区里面有人讨论 Fiber WASM 吗？", "source": "human-fiber-wasm-before-code-db-001"}
+{"qid": "q17", "group": "zh", "kind": "case", "query": "USDI 如何在官方渠道兑换成 USDT？", "source": "human-usdi-exchange-focus-001"}
+{"qid": "q18", "group": "zh", "kind": "case", "query": "审查一个 xUDT 合约，最应该看哪些代码或文档？", "source": "supplement-ckb-deep-dev-001"}
+{"qid": "q19", "group": "zh", "kind": "concept", "query": "CKB 的状态租金是怎么设计的？", "source": "curated"}
+{"qid": "q20", "group": "zh", "kind": "concept", "query": "NervosDAO 存款和提取的流程是什么？", "source": "curated"}
+{"qid": "q21", "group": "zh", "kind": "concept", "query": "lock script 和 type script 分别负责什么？", "source": "curated"}
+{"qid": "q22", "group": "zh", "kind": "concept", "query": "RGB++ 协议是怎么把资产绑定到比特币 UTXO 上的？", "source": "curated"}
+{"qid": "q23", "group": "zh", "kind": "concept", "query": "什么是 cell_deps，为什么交易里需要声明？", "source": "curated"}
+{"qid": "q24", "group": "zh", "kind": "concept", "query": "CKB-VM 为什么选择 RISC-V 指令集？", "source": "curated"}
+{"qid": "q25", "group": "zh", "kind": "concept", "query": "怎么把 CKB 合约部署到测试网？", "source": "curated"}
+{"qid": "q26", "group": "zh", "kind": "concept", "query": "Omnilock 是什么，支持哪些认证方式？", "source": "curated"}
+{"qid": "q27", "group": "zh", "kind": "concept", "query": "CKB 的 since 字段怎么实现时间锁？", "source": "curated"}
+{"qid": "q28", "group": "zh", "kind": "concept", "query": "怎么运行 CKB 全节点并同步主网？", "source": "curated"}
+{"qid": "q29", "group": "zh", "kind": "forum", "query": "Nervos Talk 上关于 CKB 代币经济模型的讨论有哪些？", "source": "curated"}
+{"qid": "q30", "group": "zh", "kind": "forum", "query": "社区里有人讨论过 CKB 的 PoW 共识和能耗吗？", "source": "curated"}
+{"qid": "q31", "group": "zh", "kind": "forum", "query": "社区对 Nervos 基础发行和二级发行的看法", "source": "curated"}
+{"qid": "q32", "group": "en", "kind": "concept", "query": "How to open a Fiber channel", "source": "curated"}
+{"qid": "q33", "group": "en", "kind": "concept", "query": "What is the Cell model in CKB?", "source": "curated"}
+{"qid": "q34", "group": "en", "kind": "concept", "query": "How does Nervos DAO compensation work?", "source": "curated"}
+{"qid": "q35", "group": "en", "kind": "concept", "query": "How to write a CKB on-chain script in Rust", "source": "curated"}
+{"qid": "q36", "group": "en", "kind": "concept", "query": "What is RGB++ and how does it work with Bitcoin?", "source": "curated"}
+{"qid": "q37", "group": "en", "kind": "concept", "query": "How do I build and sign a CKB transaction with CCC?", "source": "curated"}
+{"qid": "q38", "group": "en", "kind": "concept", "query": "How does Fiber network route multi-hop payments?", "source": "curated"}
+{"qid": "q39", "group": "en", "kind": "concept", "query": "What is the difference between Spore and ERC-721 NFTs?", "source": "curated"}
+{"qid": "q40", "group": "en", "kind": "concept", "query": "How to back up a Fiber node", "source": "curated"}
+{"qid": "q41", "group": "en", "kind": "concept", "query": "How to run a CKB light client", "source": "curated"}
+{"qid": "q42", "group": "en", "kind": "concept", "query": "How is the transaction fee rate estimated in CKB?", "source": "curated"}
+{"qid": "q43", "group": "en", "kind": "forum", "query": "Free public RPC node and indexer for CKB developers", "source": "curated"}
+{"qid": "q44", "group": "en", "kind": "forum", "query": "Community discussion about CKB tokenomics and secondary issuance", "source": "curated"}
+{"qid": "q45", "group": "en", "kind": "forum", "query": "JoyID wallet passkey integration", "source": "curated"}
+{"qid": "q46", "group": "id", "kind": "function", "query": "get_live_cell", "source": "curated"}
+{"qid": "q47", "group": "id", "kind": "function", "query": "open_channel", "source": "curated"}
+{"qid": "q48", "group": "id", "kind": "function", "query": "ckb_load_cell_data", "source": "curated"}
+{"qid": "q49", "group": "id", "kind": "function", "query": "send_transaction RPC", "source": "curated"}
+{"qid": "q50", "group": "id", "kind": "function", "query": "get_cells indexer", "source": "curated"}
+{"qid": "q51", "group": "id", "kind": "function", "query": "OutPoint", "source": "curated"}
+{"qid": "q52", "group": "id", "kind": "function", "query": "ckb_std::high_level::load_script", "source": "curated"}
+{"qid": "q53", "group": "id", "kind": "function", "query": "ckb-sdk-rust", "source": "curated"}
+{"qid": "q54", "group": "id", "kind": "function", "query": "dep_group", "source": "curated"}
+{"qid": "q55", "group": "id", "kind": "function", "query": "occupied_capacity", "source": "curated"}
+{"qid": "q56", "group": "id", "kind": "error", "query": "TransactionFailedToResolve", "source": "curated"}
+{"qid": "q57", "group": "id", "kind": "error", "query": "PoolRejectedTransactionByMinFeeRate", "source": "curated"}
+{"qid": "q58", "group": "id", "kind": "error", "query": "ExceededMaximumCycles", "source": "curated"}
+{"qid": "q59", "group": "id", "kind": "error", "query": "add_tlc", "source": "curated"}
