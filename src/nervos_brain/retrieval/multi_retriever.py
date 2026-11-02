@@ -444,7 +444,9 @@ class MultiRetriever:
             "raw_text": 1.5,
         }
         best: dict[str, dict] = {}
-        for record in self._archive.list_all():
+        # Reuse the records cached by rebuild_bm25(); reading the whole archive
+        # on every call cost ~0.85 s on the code corpus.
+        for record in self._indexed_records or self._archive.list_all():
             if not self._record_matches_filters(record, filters or {}):
                 continue
             for idx, query in enumerate(regex_queries, start=1):

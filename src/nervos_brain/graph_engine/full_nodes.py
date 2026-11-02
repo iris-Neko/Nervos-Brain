@@ -1664,8 +1664,22 @@ def retrieval_executor(state: dict) -> dict:
 # M7-T4: EvidenceMerger — 证据去重与冲突检测
 # ---------------------------------------------------------------------------
 
+def _evidence_fallback_hash(ev: dict) -> str:
+    """Identity for evidence without a content hash.
+
+    The retriever returns ``hash: ""``, so this key decides cross-hop dedup. It
+    must not depend on score, rank or payload fields that change per call
+    (hashing the whole JSON made the same document look new on every hop).
+    """
+    source = str(ev.get("source", ""))
+    anchor = str(ev.get("anchor") or ev.get("id") or "")
+    if anchor:
+        return hashlib.sha256(f"{source}\n{anchor}".encode()).hexdigest()
+    return hashlib.sha256(json.dumps(ev, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def evidence_merger(state: dict) -> dict:
-    """去重 (by hash) + 简单冲突检测 (source/version 比对)。"""
+    """去重 (by hash, 无 hash 时按 source+anchor) + 简单冲突检测 (source/version 比对)。"""
     evidence_list = state.get("evidence", [])
 
     seen_hashes: set[str] = set()
@@ -1673,7 +1687,7 @@ def evidence_merger(state: dict) -> dict:
     for ev in evidence_list:
         h = ev.get("hash", "")
         if not h:
-            h = hashlib.sha256(json.dumps(ev, sort_keys=True, default=str).encode()).hexdigest()
+            h = _evidence_fallback_hash(ev)
             ev["hash"] = h
         if h not in seen_hashes:
             seen_hashes.add(h)

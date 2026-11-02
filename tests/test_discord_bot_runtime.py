@@ -196,6 +196,8 @@ def test_build_runtime_defaults_to_dynamic_provider_registry(monkeypatch, tmp_pa
         backend_names = ["fake"]
 
     monkeypatch.setattr(runner, "build_configured_retriever", lambda: FakeRetriever())
+    # The built-in defaults must not depend on a developer's local config.yaml.
+    monkeypatch.setattr("nervos_brain.graph_engine.provider_registry.load_project_config", lambda: {})
 
     runtime, memory_service = runner._build_runtime(model="", memory_db=tmp_path / "memory.db")
 
