@@ -160,14 +160,30 @@ retrieval:
   # Qdrant 本地浅层索引位置（仅作为回滚/测试模式）
   qdrant_path: "data/qdrant_local"
   collection_name: "nervos_docs"
-  vector_size: 64               # 64=确定性哈希(离线测试), 1536=真实 embedding-2
+  vector_size: 1024             # 必须等于 embedding 模型的输出维度（bge-m3=1024）
 
   # SQLite 深层原件库路径
   archive_db: "data/archive.db"
 
-  # 是否使用真实 embedding API（false = 离线确定性哈希）
-  use_real_embedding: false
-  embedding_model: "openai/embedding-2"
+  # Embedding：入库、重建、查询三处共用同一个后端；其他 retrieval_* 段继承这里的设置。
+  #   local = 本机 sentence-transformers（pip install -e ".[local-embedding]"）
+  #   api   = OpenAI 兼容 /embeddings（litellm），例如 embedding_model: "openai/text-embedding-3-small"，vector_size: 1536
+  #   hash  = SHA-256 伪向量，只给测试用，没有语义；非测试环境下向量路会自动关闭
+  #   none  = 不建语义向量，向量路关闭
+  # 换模型或维度后必须重建 collection：
+  #   python scripts/migrate_qdrant_server_from_archive.py --public-default-backends --recreate
+  embedding_backend: "local"
+  embedding_model: "BAAI/bge-m3"
+  embedding_batch_size: 64
+  embedding_normalize: true
+  # embedding_query_prefix: ""    # e5 系列模型需要 "query: " / "passage: "
+  # embedding_doc_prefix: ""
+  # embedding_device: ""          # local：cuda / cpu，空 = 自动
+  # embedding_api_base: ""        # api：留空则复用 llm 段的 api_base / api_key
+  # embedding_api_key_env: ""
+  # embedding_cache_db: "data/embedding_cache/embeddings.db"
+  # enable_vector: true           # false = 只关向量路，其余四路照常
+  # 旧开关 use_real_embedding 仍可读：embedding_backend 为空时 true=api、false=hash。
 
   # 多路检索参数
   top_k_per_path: 10

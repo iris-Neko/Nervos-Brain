@@ -76,6 +76,39 @@ data/qdrant_github_code/
 
 它们主要用于本地或离线 fallback。线上 Telegram/Discord 多进程部署建议使用 Docker Qdrant server。
 
+注意：这三个目录是早期用 64 维哈希伪向量写的快照，没有 `embedding_model` 标签，条数也落后于 archive DB。配置了真实 embedding 后端时，启动检查会判定它们不兼容并关闭向量路；要用向量检索，先按下面的方法重建（加 `--local`）。
+
+## Embedding 后端与重建
+
+向量由 `embedding_backend` 指定的模型生成（配置见 [configuration.md](configuration.md#embedding向量路)）。入库用 `标题 + "\n" + summary` 编码，查询用查询文本编码，两边必须是同一个模型；每个点的 payload 里记录了 `embedding_model`，启动时会和配置比对。
+
+重建 Docker Qdrant server（会先删除再重建三个 collection）：
+
+```bash
+python scripts/migrate_qdrant_server_from_archive.py --public-default-backends --recreate
+```
+
+它读取 `config.yaml` 里 `retrieval` 段的 embedding 设置；没有 config.yaml 时用代码默认值（`hash`，向量路会保持关闭）。也可以用命令行覆盖：
+
+```bash
+python scripts/migrate_qdrant_server_from_archive.py --public-default-backends --recreate \
+  --embedding-backend local --embedding-model BAAI/bge-m3 --vector-size 1024
+```
+
+`bootstrap_qdrant_server.sh` 同样支持用环境变量传入：`EMBEDDING_BACKEND`、`EMBEDDING_MODEL`、`EMBEDDING_VECTOR_SIZE`、`EMBEDDING_BATCH_SIZE`。
+
+离线评测或本地试验可以重建嵌入式（path 模式）目录，不碰线上 server：
+
+```bash
+python scripts/migrate_qdrant_server_from_archive.py --public-default-backends --local \
+  --qdrant-root data/qdrant_eval --recreate \
+  --embedding-backend local --embedding-model BAAI/bge-m3 --vector-size 1024
+```
+
+文档向量缓存在 `embedding_cache_db`（SQLite，键为编码文本哈希 + 模型），再次重建时没变的条目不会重新编码。换模型或 `embedding_max_seq_length` 会自动用新的缓存键。
+
+增量入库（Talk、GitHub 增量脚本）走同一个后端，所以增量更新的机器也需要能加载这个模型或访问 embeddings 接口。
+
 ## Talk forum 增量更新
 
 论坛已经完成全量爬取后，日常只需要增量更新：

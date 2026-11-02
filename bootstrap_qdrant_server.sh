@@ -71,6 +71,11 @@ migrate_args=(
 if [[ "$QDRANT_RECREATE" != "0" ]]; then
   migrate_args+=(--recreate)
 fi
+# Optional embedding overrides; without them the migration reads config.yaml's retrieval section.
+[[ -n "${EMBEDDING_BACKEND:-}" ]] && migrate_args+=(--embedding-backend "$EMBEDDING_BACKEND")
+[[ -n "${EMBEDDING_MODEL:-}" ]] && migrate_args+=(--embedding-model "$EMBEDDING_MODEL")
+[[ -n "${EMBEDDING_VECTOR_SIZE:-}" ]] && migrate_args+=(--vector-size "$EMBEDDING_VECTOR_SIZE")
+[[ -n "${EMBEDDING_BATCH_SIZE:-}" ]] && migrate_args+=(--embedding-batch-size "$EMBEDDING_BATCH_SIZE")
 "$ENV_RUNNER_BIN" "${migrate_args[@]}"
 
 echo "[4/4] Collection status:"
