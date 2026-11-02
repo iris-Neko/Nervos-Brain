@@ -87,7 +87,7 @@ retrieval:
 | 后端 | 说明 |
 |---|---|
 | `local` | 本机 sentence-transformers。可选依赖：`pip install -e ".[local-embedding]"`，GPU 需要装对应的 torch。bge-m3（fp16，batch 64）在 RTX 3080 上编码 4 万条约 2.3 分钟，连同本地 Qdrant 写入重建三个库总共约 5 分钟。 |
-| `api` | OpenAI 兼容的 `/embeddings`（`litellm.embedding`，批量调用，带重试）。要先确认网关支持 embeddings。 |
+| `api` | OpenAI 兼容的 `/embeddings`（`litellm.embedding`，批量调用，带重试）。网关需要提供 `/embeddings` 接口。 |
 | `hash` | SHA-256 伪向量，**只给测试用**，没有任何语义。pytest 之外它会让向量路自动关闭（可用 `embedding_allow_hash: true` 或环境变量 `NERVOS_ALLOW_HASH_EMBEDDING=1` 强行打开，只用于评测对照）。 |
 | `none` | 不建语义向量，向量路关闭，其余四路照常。 |
 
